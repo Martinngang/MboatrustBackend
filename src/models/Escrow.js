@@ -9,6 +9,18 @@ const FeeBreakdownSchema = new Schema(
   { _id: false }
 );
 
+const CurrencyConversionSchema = new Schema(
+  {
+    fromCurrency: { type: String, default: null },
+    toCurrency: { type: String, default: null },
+    rate: { type: Number, default: null },
+    amountBeforeConversion: { type: Number, default: null },
+    convertedAmount: { type: Number, default: null },
+    conversionFee: { type: Number, default: null },
+  },
+  { _id: false }
+);
+
 const EscrowSchema = new Schema(
   {
     projectId: { type: Schema.Types.ObjectId, ref: 'Project', required: true },
@@ -18,8 +30,10 @@ const EscrowSchema = new Schema(
     feeBreakdown: { type: FeeBreakdownSchema, default: () => ({}) },
     netAmount: { type: Number, required: true, min: 0 },
     currency: { type: String, default: 'XAF' },
-    paymentProvider: { type: String, enum: ['mtn_momo', 'orange_money'], required: true },
+    paymentProvider: { type: String, enum: ['mtn_momo', 'orange_money', 'flutterwave'], required: true },
+    providerRole: { type: String, enum: ['collection', 'disbursement'], required: true },
     providerReference: { type: String, default: null },
+    currencyConversion: { type: CurrencyConversionSchema, default: null },
     status: { type: String, enum: ['pending', 'completed', 'failed', 'reversed'], default: 'pending' },
   },
   { timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' } }

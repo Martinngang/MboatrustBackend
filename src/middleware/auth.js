@@ -4,10 +4,38 @@ const { initFirebase } = require('../config/firebase');
 const { devAuthBypass } = require('../config/env');
 const { User } = require('../models');
 
+// Firebase's decoded token exposes every provider currently linked to this
+// UID under `firebase.identities` (e.g. { 'google.com': ['sub'], email:
+// ['a@b.com'], phone: ['+237...'] }) — this is the ground truth for account
+// linking, since `linkWithCredential`/`linkWithPopup` on the client add a
+// new entry here without changing the UID. `sign_in_provider` alone only
+// reflects the method used for *this* token, not everything linked.
+const IDENTITY_KEY_TO_PROVIDER = { 'google.com': 'google', email: 'email', phone: 'phone' };
+
+function parseAuthProviders(decoded) {
+  const identities = decoded.firebase?.identities || {};
+  const providers = [];
+  for (const [key, values] of Object.entries(identities)) {
+    const provider = IDENTITY_KEY_TO_PROVIDER[key];
+    if (!provider || !Array.isArray(values) || values.length === 0) continue;
+    providers.push({ provider, providerId: String(values[0]) });
+  }
+  // Fallback for tokens without a populated `identities` claim.
+  if (providers.length === 0) {
+    const provider = decoded.firebase?.sign_in_provider?.includes('phone')
+      ? 'phone'
+      : decoded.firebase?.sign_in_provider?.includes('google')
+      ? 'google'
+      : 'email';
+    providers.push({ provider, providerId: decoded.uid });
+  }
+  return providers;
+}
+
 /**
  * Verifies the Firebase ID token sent as `Authorization: Bearer <token>`
  * and attaches the corresponding local User document as req.user,
- * creating one on first sign-in ("just-in-time" user provisioning).
+ * creating one on first sign-in ("just-in-time" user provisioning").
  *
  * Dev-only escape hatch: when DEV_AUTH_BYPASS=true and no Authorization
  * header is present, a `x-dev-user-id` header is used directly as the
@@ -41,21 +69,30 @@ const authenticate = catchAsync(async (req, res, next) => {
     throw ApiError.unauthorized('Invalid or expired token');
   });
 
+  const providers = parseAuthProviders(decoded);
   let user = await User.findOne({ firebaseUid: decoded.uid });
   if (!user) {
-    const provider = decoded.firebase?.sign_in_provider?.includes('phone')
-      ? 'phone'
-      : decoded.firebase?.sign_in_provider?.includes('google')
-      ? 'google'
-      : 'email';
-
     user = await User.create({
       fullName: decoded.name || 'New User',
       email: decoded.email || undefined,
       phoneNumber: decoded.phone_number || undefined,
       firebaseUid: decoded.uid,
-      authProviders: [{ provider, providerId: decoded.uid }],
+      authProviders: providers,
     });
+  } else {
+    // Keep the linked-provider list current — e.g. a user who signed up
+    // with phone and later links Google in Settings keeps the same
+    // firebaseUid, so this is the only place that picks the change up.
+    const knownProviders = new Set(user.authProviders.map((p) => p.provider));
+    const newlyLinked = providers.filter((p) => !knownProviders.has(p.provider));
+    const emailChanged = decoded.email && user.email !== decoded.email;
+    const phoneChanged = decoded.phone_number && user.phoneNumber !== decoded.phone_number;
+    if (newlyLinked.length > 0 || emailChanged || phoneChanged) {
+      user.authProviders.push(...newlyLinked);
+      if (emailChanged) user.email = decoded.email;
+      if (phoneChanged) user.phoneNumber = decoded.phone_number;
+      await user.save();
+    }
   }
 
   req.user = user;

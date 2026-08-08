@@ -9,7 +9,7 @@ Express + MongoDB (Mongoose) API implementing the data model and services descri
 - Firebase Admin SDK (verifies ID tokens from Firebase Auth — Google, email/password, phone+OTP)
 - Zod (request validation)
 - Cloudinary (evidence photo/video + land document storage)
-- MTN MoMo / Orange Money sandbox stubs, Smile Identity sandbox stub (see `src/services/`)
+- MTN MoMo / Orange Money sandbox stubs, Flutterwave collection mock provider, Smile Identity sandbox stub (see `src/services/`)
 
 ## Getting started
 
@@ -53,6 +53,8 @@ src/
   the sandbox `paymentService`). Milestone evidence submission, approval,
   and automatic escrow release on approval are wired end-to-end
   (`POST /:id/milestones/:milestoneId/evidence`, `.../approval`).
+  See `docs/dual-rail-payment-architecture.md` for the new collection vs.
+  disbursement provider model.
 - **Tendering**: `Bid` → accept → auto-generates a `Contract`, rejects
   competing bids, moves the project to `in_progress`.
 - **Land**: `LandListing` CRUD, document upload, verification status

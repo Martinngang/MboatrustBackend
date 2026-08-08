@@ -4,7 +4,7 @@ const catchAsync = require('../utils/catchAsync');
 const kycService = require('../services/kycService');
 
 const submitVerification = catchAsync(async (req, res) => {
-  const { idType, idNumber, documentUrl } = req.body;
+  const { idType, idNumber, country, documentUrl } = req.body;
   const user = await User.findById(req.user._id);
   user.kycStatus = 'pending';
   await user.save();
@@ -13,6 +13,7 @@ const submitVerification = catchAsync(async (req, res) => {
     userId: String(user._id),
     idType,
     idNumber,
+    ...(country ? { country } : {}),
     documentUrl,
   });
 

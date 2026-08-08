@@ -24,7 +24,7 @@ const createProject = z.object({
   imageUrl: z.string().optional().default(''),
   deadline: z.coerce.date().optional(),
   totalAmount: z.number().min(0),
-  currency: z.string().optional().default('XAF'),
+  currency: z.enum(['USD', 'EUR', 'GBP', 'XAF']).optional().default('XAF'),
   requiresMultiSig: z.boolean().optional().default(false),
   milestones: z.array(milestoneInput).optional().default([]),
 });
@@ -33,8 +33,9 @@ const updateProject = createProject.partial();
 
 const fundProject = z.object({
   amount: z.number().positive(),
-  paymentProvider: z.enum(['mtn_momo', 'orange_money']),
-  payerPhoneNumber: z.string().min(6),
+  paymentProvider: z.enum(['mtn_momo', 'orange_money', 'flutterwave']),
+  currency: z.enum(['USD', 'EUR', 'GBP', 'XAF']).optional().default('XAF'),
+  payerPhoneNumber: z.string().min(6).optional(),
 });
 
 const submitEvidence = z.object({

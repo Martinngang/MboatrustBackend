@@ -4,6 +4,7 @@ const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const feeService = require('../services/feeService');
+const conversionService = require('../services/conversionService');
 const paymentService = require('../services/paymentService');
 const storageService = require('../services/storageService');
 const notificationService = require('../services/notificationService');
@@ -86,17 +87,26 @@ const getFundingSummary = catchAsync(async (req, res) => {
  * status pending -> completed via a webhook instead.
  */
 const fundProject = catchAsync(async (req, res) => {
-  const { amount, paymentProvider, payerPhoneNumber } = req.body;
+  const { amount, paymentProvider, currency: requestedCurrency, payerPhoneNumber } = req.body;
   const project = await Project.findById(req.params.id);
   if (!project) throw ApiError.notFound('Project not found');
+  const currency = requestedCurrency || project.currency;
   if (!['open', 'funded', 'in_progress'].includes(project.status)) {
     throw ApiError.conflict(`Cannot fund a project in status "${project.status}"`);
   }
 
-  const fee = await feeService.calculateFee('project_funding', amount, project.currency);
+  if (paymentProvider === 'mtn_momo' && !payerPhoneNumber) {
+    throw ApiError.badRequest('Payer phone number is required for MTN MoMo funding');
+  }
+
+  if (['mtn_momo', 'orange_money'].includes(paymentProvider) && currency !== 'XAF') {
+    throw ApiError.badRequest('Mobile money funding must be paid in XAF');
+  }
+
+  const fee = await feeService.calculateFee('project_funding', amount, currency);
   const paymentResult = await paymentService.collect(paymentProvider, {
     amount,
-    currency: project.currency,
+    currency,
     payerPhoneNumber,
     externalId: `fund_${project._id}`,
   });
@@ -107,8 +117,9 @@ const fundProject = catchAsync(async (req, res) => {
     grossAmount: fee.grossAmount,
     feeBreakdown: { feeType: fee.feeType, feeRate: fee.feeRate, feeAmount: fee.feeAmount },
     netAmount: fee.netAmount,
-    currency: project.currency,
+    currency,
     paymentProvider,
+    providerRole: 'collection',
     providerReference: paymentResult.providerReference,
     status: paymentResult.status,
   });
@@ -131,10 +142,19 @@ const fundProject = catchAsync(async (req, res) => {
 });
 
 async function releaseMilestoneEscrow(project, milestone) {
-  const fee = await feeService.calculateFee('milestone_release', milestone.amount, project.currency);
+  const payoutCurrency = 'XAF';
+  let conversion = null;
+  let disbursementGross = milestone.amount;
+
+  if (project.currency !== payoutCurrency) {
+    conversion = await conversionService.convertAmount(milestone.amount, project.currency, payoutCurrency);
+    disbursementGross = conversion.settledAmount;
+  }
+
+  const fee = await feeService.calculateFee('milestone_release', disbursementGross, payoutCurrency);
   const paymentResult = await paymentService.disburse('mtn_momo', {
     amount: fee.netAmount,
-    currency: project.currency,
+    currency: payoutCurrency,
     payeePhoneNumber: null,
     externalId: `release_${project._id}_${milestone._id}`,
   });
@@ -146,9 +166,11 @@ async function releaseMilestoneEscrow(project, milestone) {
     grossAmount: fee.grossAmount,
     feeBreakdown: { feeType: fee.feeType, feeRate: fee.feeRate, feeAmount: fee.feeAmount },
     netAmount: fee.netAmount,
-    currency: project.currency,
+    currency: payoutCurrency,
     paymentProvider: 'mtn_momo',
+    providerRole: 'disbursement',
     providerReference: paymentResult.providerReference,
+    currencyConversion: conversion,
     status: paymentResult.status,
   });
 

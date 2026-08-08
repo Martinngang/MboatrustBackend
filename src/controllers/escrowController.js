@@ -57,6 +57,7 @@ const refund = catchAsync(async (req, res) => {
     netAmount: fee.netAmount,
     currency: original.currency,
     paymentProvider: original.paymentProvider,
+    providerRole: 'disbursement',
     providerReference: paymentResult.providerReference,
     status: paymentResult.status,
   });

@@ -7,6 +7,7 @@ const validate = require('../middleware/validate');
 const submitVerification = z.object({
   idType: z.string().min(1),
   idNumber: z.string().min(1),
+  country: z.string().length(2).optional(),
   documentUrl: z.string().url().optional(),
 });
 

@@ -28,7 +28,11 @@ module.exports = {
 
   momo: {
     baseUrl: process.env.MOMO_SANDBOX_BASE_URL || 'https://sandbox.momodeveloper.mtn.com',
+    // MTN issues a separate subscription key per product you subscribe to
+    // (Collections vs Disbursements) — falls back to the Collections key if
+    // no separate Disbursements key is set, since some setups share one.
     subscriptionKey: process.env.MOMO_SUBSCRIPTION_KEY || '',
+    disbursementSubscriptionKey: process.env.MOMO_DISBURSEMENT_SUBSCRIPTION_KEY || process.env.MOMO_SUBSCRIPTION_KEY || '',
     apiUser: process.env.MOMO_API_USER || '',
     apiKey: process.env.MOMO_API_KEY || '',
   },
@@ -37,6 +41,11 @@ module.exports = {
     merchantKey: process.env.OM_MERCHANT_KEY || '',
     clientId: process.env.OM_CLIENT_ID || '',
     clientSecret: process.env.OM_CLIENT_SECRET || '',
+  },
+  flutterwave: {
+    baseUrl: process.env.FLUTTERWAVE_BASE_URL || 'https://api.flutterwave.com',
+    publicKey: process.env.FLUTTERWAVE_PUBLIC_KEY || '',
+    secretKey: process.env.FLUTTERWAVE_SECRET_KEY || '',
   },
   smileIdentity: {
     partnerId: process.env.SMILE_ID_PARTNER_ID || '',

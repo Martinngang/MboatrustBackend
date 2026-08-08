@@ -2,7 +2,8 @@ const axios = require('axios');
 const crypto = require('crypto');
 const env = require('../config/env');
 
-const SANDBOX_BASE_URL = 'https://testapi.smileidentity.com/v1';
+const TEST_BASE_URL = 'https://testapi.smileidentity.com/v1';
+const PRODUCTION_BASE_URL = 'https://api.smileidentity.com/v1';
 const JOB_TYPE_BASIC_KYC = 5;
 
 /** HMAC-SHA256(apiKey, timestamp + partnerId + "sid_request"), base64-encoded
@@ -12,19 +13,23 @@ function generateSignature(partnerId, apiKey, timestamp) {
   return crypto.createHmac('sha256', apiKey).update(timestamp, 'utf8').update(partnerId, 'utf8').update('sid_request', 'utf8').digest('base64');
 }
 
+// "Sandbox" vs "production" picks which of Smile ID's own base URLs to call
+// — it is NOT the same thing as "credentials are configured". A real
+// sandbox call is still a real call; only missing credentials should fall
+// back to a mock. (This used to be inverted — sandbox=true short-circuited
+// to a mock unconditionally, so real sandbox credentials were never used.)
 function isConfigured() {
-  return Boolean(env.smileIdentity.partnerId && env.smileIdentity.apiKey && !env.smileIdentity.sandbox);
+  return Boolean(env.smileIdentity.partnerId && env.smileIdentity.apiKey);
 }
 
 /**
  * Smile Identity Basic KYC (job_type 5): verifies an individual's ID number
- * against the issuing authority's records. In sandbox mode (default, or
- * whenever no partner credentials are configured) this returns a mock
- * "verified" result with the exact shape a real call would return, so
- * switching to a live contract later is a config change only.
+ * against the issuing authority's records. Falls back to a mock "verified"
+ * result with the exact shape a real call would return only when no
+ * partner credentials are configured at all.
  */
 async function verifyIdentity({ userId, idType, idNumber, country = 'CM', documentUrl }) {
-  if (env.smileIdentity.sandbox || !env.smileIdentity.partnerId || !env.smileIdentity.apiKey) {
+  if (!isConfigured()) {
     return {
       provider: 'smile_identity',
       sandbox: true,
@@ -40,10 +45,11 @@ async function verifyIdentity({ userId, idType, idNumber, country = 'CM', docume
     };
   }
 
+  const baseUrl = env.smileIdentity.sandbox ? TEST_BASE_URL : PRODUCTION_BASE_URL;
   const timestamp = new Date().toISOString();
   const jobId = crypto.randomUUID();
   const { data } = await axios.post(
-    `${SANDBOX_BASE_URL}/id_verification`,
+    `${baseUrl}/id_verification`,
     {
       partner_id: env.smileIdentity.partnerId,
       signature: generateSignature(env.smileIdentity.partnerId, env.smileIdentity.apiKey, timestamp),
@@ -60,7 +66,7 @@ async function verifyIdentity({ userId, idType, idNumber, country = 'CM', docume
 
   return {
     provider: 'smile_identity',
-    sandbox: false,
+    sandbox: env.smileIdentity.sandbox,
     userId,
     idType,
     idNumber,
