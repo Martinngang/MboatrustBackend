@@ -3,12 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Mboa Trust — Fund Project (Mock)</title>
+    <title>Mboa Trust — Fund Project</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
     <main class="container">
-      <h1>Fund Project (Mock)</h1>
+      <h1>Fund Project</h1>
 
       <section class="form">
         <label>Backend base URL
@@ -25,8 +25,9 @@
 
         <label>Payment method
           <select id="paymentProvider">
-            <optgroup label="International payment">
-              <option value="flutterwave">Card / Bank (Flutterwave mock)</option>
+            <optgroup label="International collection">
+              <option value="stripe">Card / Bank transfer (Stripe)</option>
+              <option value="flutterwave">Card / Bank transfer (Flutterwave)</option>
             </optgroup>
             <optgroup label="Cameroon mobile money">
               <option value="mtn_momo">MTN MoMo</option>
@@ -52,6 +53,16 @@
           <input id="payerPhone" type="text" placeholder="+2376xxxxxxx" />
         </label>
 
+        <label id="stripePublishableKeyLabel">Stripe publishable key (required for card confirmation)
+          <input id="stripePublishableKey" type="text" placeholder="pk_test_..." />
+        </label>
+
+        <div id="cardSection" class="card-section">
+          <label>Card details</label>
+          <div id="cardElement" class="card-element"></div>
+          <div id="cardError" class="card-error"></div>
+        </div>
+
         <div class="summary">
           <h2>Summary</h2>
           <div id="summaryLines"></div>
@@ -63,15 +74,16 @@
       </section>
 
       <section class="history">
-        <h2>Transaction history (mocked display)</h2>
+        <h2>Transaction history</h2>
         <div id="history"></div>
       </section>
 
       <footer>
-        <small>Tooltip: Pay with your card from anywhere — we handle the transfer to Cameroon via mobile money.</small>
+        <small>Pay with your card from anywhere — we handle the transfer to Cameroon via mobile money.</small>
       </footer>
     </main>
 
+    <script src="https://js.stripe.com/v3"></script>
     <script src="app.js"></script>
   </body>
 </html>

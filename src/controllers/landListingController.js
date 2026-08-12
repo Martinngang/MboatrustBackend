@@ -95,16 +95,15 @@ const updateVerificationStatus = catchAsync(async (req, res) => {
 });
 
 /**
- * Buyer starts a purchase on a verified listing. Creates a land_purchase
- * Project (the same Project/Milestone/Escrow machinery the funding and
- * tender pillars already use — a single "full payment on transfer"
- * milestone stands in for a formal offer/negotiation step, which isn't
- * part of the architecture doc's data model) and links it back to the
- * listing so both sides can track it from here.
+ * Creates the land_purchase Project (the same Project/Milestone/Escrow
+ * machinery the funding and tender pillars already use — a single "full
+ * payment on transfer" milestone stands in for a formal offer/negotiation
+ * step, which isn't part of the architecture doc's data model) and links it
+ * back to the listing. Factored out of the `purchase` route handler so
+ * landOfferController's `accept` can call into the exact same project-
+ * creation logic once an offer is agreed, instead of duplicating it.
  */
-const purchase = catchAsync(async (req, res) => {
-  const listing = await LandListing.findById(req.params.id);
-  if (!listing) throw ApiError.notFound('Land listing not found');
+async function createPurchaseProject(listing, buyerId, amount) {
   if (listing.verificationStatus !== 'verified') {
     throw ApiError.conflict('Only a verified listing can be purchased');
   }
@@ -112,14 +111,14 @@ const purchase = catchAsync(async (req, res) => {
 
   const project = await Project.create({
     projectType: 'land_purchase',
-    ownerId: req.user._id,
+    ownerId: buyerId,
     title: listing.title || `Land purchase — ${listing.city}`,
     description: `Purchase of ${listing.sizeSqm}m² plot in ${listing.city}, ${listing.region}.`,
     locationName: `${listing.city}, ${listing.region}`,
     location: listing.location,
-    totalAmount: req.body.amount,
+    totalAmount: amount,
     status: 'open',
-    milestones: [{ name: 'Full payment on ownership transfer', amount: req.body.amount, orderIndex: 0 }],
+    milestones: [{ name: 'Full payment on ownership transfer', amount, orderIndex: 0 }],
   });
 
   listing.linkedProjectId = project._id;
@@ -130,7 +129,19 @@ const purchase = catchAsync(async (req, res) => {
     projectId: project._id,
   });
 
+  return project;
+}
+
+/** Buyer starts a purchase directly on a verified listing at its asking
+ * price, skipping any negotiation — the original, still-supported path for
+ * a buyer who doesn't want to haggle. See landOfferController for the
+ * offer/counter/accept negotiation flow, which calls createPurchaseProject
+ * too once both sides agree on a price. */
+const purchase = catchAsync(async (req, res) => {
+  const listing = await LandListing.findById(req.params.id);
+  if (!listing) throw ApiError.notFound('Land listing not found');
+  const project = await createPurchaseProject(listing, req.user._id, req.body.amount);
   return created(res, { listing, project });
 });
 
-module.exports = { getAll, getOne, create, update, remove, addDocument, updateVerificationStatus, purchase };
+module.exports = { getAll, getOne, create, update, remove, addDocument, updateVerificationStatus, purchase, createPurchaseProject };

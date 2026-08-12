@@ -47,9 +47,24 @@ module.exports = {
     publicKey: process.env.FLUTTERWAVE_PUBLIC_KEY || '',
     secretKey: process.env.FLUTTERWAVE_SECRET_KEY || '',
   },
+  stripe: {
+    secretKey: process.env.STRIPE_SECRET_KEY || '',
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || ''
+  },
   smileIdentity: {
     partnerId: process.env.SMILE_ID_PARTNER_ID || '',
     apiKey: process.env.SMILE_ID_API_KEY || '',
     sandbox: process.env.SMILE_ID_SANDBOX !== 'false',
+  },
+
+  // Optional AI layer (Gemini) on top of the deterministic fraud checks and
+  // heuristic contractor scoring — see services/aiClient.js. Every feature
+  // that reads this must degrade to heuristic-only when geminiApiKey is
+  // blank, never throw.
+  ai: {
+    geminiApiKey: process.env.GEMINI_API_KEY || '',
+    model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
+    fraudAnalysisEnabled: process.env.AI_FRAUD_ANALYSIS_ENABLED !== 'false',
+    matchingRationaleEnabled: process.env.AI_MATCHING_RATIONALE_ENABLED !== 'false',
   },
 };

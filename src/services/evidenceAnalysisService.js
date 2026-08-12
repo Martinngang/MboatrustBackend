@@ -1,20 +1,16 @@
 const crypto = require('crypto');
 const exifr = require('exifr');
 const { Project } = require('../models');
+const { haversineDistanceMeters } = require('../utils/geo');
+const { isAiConfigured, analyzeWithGemini, parseJsonResponse } = require('./aiClient');
+const env = require('../config/env');
 
-const EARTH_RADIUS_M = 6_371_000;
 const LOCATION_MATCH_RADIUS_M = 2000; // generous — GPS drift + informal addressing in rural areas
 const RECENT_WINDOW_MS = 1000 * 60 * 60 * 24 * 3; // 3 days: evidence should reflect a recent site visit, not an old photo
 
-function haversineMeters(a, b) {
-  const toRad = (d) => (d * Math.PI) / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLng = toRad(b.lng - a.lng);
-  const lat1 = toRad(a.lat);
-  const lat2 = toRad(b.lat);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
-}
+// Kept as a local alias so the rest of this file (and its existing exported
+// name, which landDuplicateService used to import) doesn't need to change.
+const haversineMeters = haversineDistanceMeters;
 
 function sha256(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
@@ -72,4 +68,49 @@ async function analyzeEvidence(buffer, projectLocation, fallbackGeotag = null) {
   return { geotag, fileHash, locationMatch, timestampRecent, duplicateFlag, capturedAt: exif.capturedAt };
 }
 
-module.exports = { analyzeEvidence, haversineMeters, sha256 };
+/**
+ * AI second opinion — ONLY called when a heuristic signal already looks off
+ * (duplicate hash, geotag mismatch, or stale timestamp). Never runs on clean
+ * evidence, to keep cost/latency bounded. Returns null on anything short of
+ * a clean, parseable success (AI unconfigured, disabled, call failure, or an
+ * unparseable/malformed reply) — the caller must treat null exactly like "no
+ * second opinion available" and keep the deterministic flag as-is.
+ */
+async function getAiSecondOpinion({ analysis, project, milestone, fileUrl, evidenceType }) {
+  const heuristicLooksOff = analysis.duplicateFlag || analysis.locationMatch === false || analysis.timestampRecent === false;
+  if (!heuristicLooksOff || !env.ai.fraudAnalysisEnabled || !isAiConfigured()) return null;
+
+  const system =
+    'You are a fraud-review second opinion for Mboa Trust, an escrow platform that releases milestone ' +
+    'payments for verified construction/infrastructure work in Cameroon once proof is submitted. This ' +
+    'piece of evidence has already been flagged by deterministic checks below. Give your own independent ' +
+    'assessment of whether it looks like genuine on-site proof of the described work, or looks staged, ' +
+    'reused, or otherwise untrustworthy. Reply with strict JSON only, no prose, no markdown fences: ' +
+    '{"riskScore": <0-100 integer>, "suspicious": <true|false>, "rationale": "<one or two sentences>"}';
+
+  const prompt =
+    `Project category: ${project.category || 'unspecified'}\n` +
+    `Project description: ${project.description || 'none'}\n` +
+    `Milestone: ${milestone.name} — ${milestone.description || 'no description'}\n` +
+    `Deterministic signals already triggered: duplicateFlag=${analysis.duplicateFlag}, ` +
+    `locationMatch=${analysis.locationMatch}, timestampRecent=${analysis.timestampRecent}\n` +
+    `Evidence type: ${evidenceType}`;
+
+  const result = await analyzeWithGemini({
+    system,
+    prompt,
+    imageUrl: evidenceType === 'photo' ? fileUrl : undefined,
+  });
+  if (!result.ok) return null;
+
+  const parsed = parseJsonResponse(result.text);
+  if (!parsed || typeof parsed.riskScore !== 'number') return null;
+
+  return {
+    riskScore: Math.max(0, Math.min(100, Math.round(parsed.riskScore))),
+    suspicious: Boolean(parsed.suspicious),
+    rationale: typeof parsed.rationale === 'string' ? parsed.rationale.slice(0, 1000) : '',
+  };
+}
+
+module.exports = { analyzeEvidence, haversineMeters, sha256, getAiSecondOpinion };

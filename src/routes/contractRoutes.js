@@ -6,6 +6,7 @@ const router = Router();
 
 router.get('/', authenticate, contractController.getAll);
 router.get('/:id', authenticate, contractController.getOne);
-router.patch('/:id', authenticate, contractController.update);
+router.post('/:id/complete', authenticate, contractController.markCompleted);
+router.post('/:id/terminate', authenticate, contractController.terminate);
 
 module.exports = router;

@@ -4,6 +4,9 @@ const updateProfile = z.object({
   fullName: z.string().min(1).optional(),
   preferredLanguage: z.enum(['en', 'fr']).optional(),
   avatarUrl: z.string().url().optional(),
+  // Set to true exactly once, by ProfileSetupScreen's final "Complete setup"
+  // call — the flag that lets a returning user skip role selection entirely.
+  onboardingCompleted: z.boolean().optional(),
 });
 
 const addRole = z.object({

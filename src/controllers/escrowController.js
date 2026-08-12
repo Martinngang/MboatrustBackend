@@ -7,6 +7,10 @@ const paymentService = require('../services/paymentService');
 
 // Transactions are their own collection (not embedded in Project) so admin
 // revenue reports and per-user transaction history can query independently.
+// A non-admin caller is silently scoped to their own transactions — as the
+// contractor a release/fee_deduction was paid to, or as the funder of a
+// project a fund/refund happened on — rather than being blocked outright;
+// only an unscoped, cross-user view is admin-only.
 const getAll = catchAsync(async (req, res) => {
   const { page = 1, limit = 20, projectId, type, status, paymentProvider } = req.query;
   const filter = {};
@@ -15,8 +19,15 @@ const getAll = catchAsync(async (req, res) => {
   if (status) filter.status = status;
   if (paymentProvider) filter.paymentProvider = paymentProvider;
 
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  if (!isAdmin) {
+    const myProjects = await Project.find({ ownerId: req.user._id }).select('_id').lean();
+    filter.$or = [{ contractorId: req.user._id }, { projectId: { $in: myProjects.map((p) => p._id) } }];
+  }
+
   const [items, total] = await Promise.all([
     Escrow.find(filter)
+      .populate('projectId', 'title projectType')
       .sort('-createdAt')
       .skip((page - 1) * limit)
       .limit(Number(limit)),

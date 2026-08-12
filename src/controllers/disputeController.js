@@ -11,6 +11,12 @@ const getAll = catchAsync(async (req, res) => {
   if (projectId) filter.projectId = projectId;
   if (status) filter.status = status;
 
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  if (!isAdmin) {
+    const myProjects = await Project.find({ ownerId: req.user._id }).select('_id').lean();
+    filter.$or = [{ raisedBy: req.user._id }, { projectId: { $in: myProjects.map((p) => p._id) } }];
+  }
+
   const [items, total] = await Promise.all([
     Dispute.find(filter)
       .populate('raisedBy', 'fullName')
@@ -28,6 +34,13 @@ const getOne = catchAsync(async (req, res) => {
     .populate('raisedBy', 'fullName')
     .populate({ path: 'projectId', select: 'title totalAmount ownerId', populate: { path: 'ownerId', select: 'fullName' } });
   if (!dispute) throw ApiError.notFound('Dispute not found');
+
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  const project = dispute.projectId;
+  const ownerId = project && typeof project.ownerId === 'object' ? project.ownerId._id : project?.ownerId;
+  const isParty = String(dispute.raisedBy?._id ?? dispute.raisedBy) === String(req.user._id) || String(ownerId) === String(req.user._id);
+  if (!isAdmin && !isParty) throw ApiError.forbidden('Not authorized to view this dispute');
+
   return ok(res, dispute);
 });
 

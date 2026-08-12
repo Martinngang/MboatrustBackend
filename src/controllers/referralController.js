@@ -4,7 +4,7 @@ const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 
 const getMine = catchAsync(async (req, res) => {
-  const referrals = await Referral.find({ referrerId: req.user._id }).sort('-createdAt');
+  const referrals = await Referral.find({ referrerId: req.user._id }).populate('referredId', 'fullName').sort('-createdAt');
   return ok(res, referrals);
 });
 

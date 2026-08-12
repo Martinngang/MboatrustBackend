@@ -47,8 +47,20 @@ const UserSchema = new Schema(
     },
     kycLevel: { type: String, enum: ['basic', 'enhanced'], default: 'basic' },
     roles: { type: [RoleEntrySchema], default: [] },
+    // Set once, at the end of the registration flow (ProfileSetupScreen) —
+    // the frontend's sole source of truth for "has this account finished
+    // onboarding", so a returning user is never asked to pick a role again
+    // just because e.g. they abandoned profile setup with roles already
+    // saved. See api/session.ts's resolveAuthDestination on the client.
+    onboardingCompleted: { type: Boolean, default: false },
     avatarUrl: { type: String, default: null },
     isActive: { type: Boolean, default: true },
+    // Firebase Cloud Messaging token for the device currently signed in —
+    // set via POST /users/me/device-token. Single token, not an array: good
+    // enough for "push works on whichever device last registered," which is
+    // the scope this backend needs; a real multi-device inbox would need a
+    // token-per-device list instead.
+    fcmDeviceToken: { type: String, default: null },
   },
   { timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' } }
 );

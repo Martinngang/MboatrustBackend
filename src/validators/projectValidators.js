@@ -33,7 +33,7 @@ const updateProject = createProject.partial();
 
 const fundProject = z.object({
   amount: z.number().positive(),
-  paymentProvider: z.enum(['mtn_momo', 'orange_money', 'flutterwave']),
+  paymentProvider: z.enum(['mtn_momo', 'orange_money', 'flutterwave', 'stripe']),
   currency: z.enum(['USD', 'EUR', 'GBP', 'XAF']).optional().default('XAF'),
   payerPhoneNumber: z.string().min(6).optional(),
 });

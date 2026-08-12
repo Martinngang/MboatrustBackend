@@ -1,8 +1,13 @@
+// Note: bid comparison (score-ranked bids for a project) already exists at
+// GET /projects/:projectId/bids-with-scores (matchingController.js, added
+// by the fraud/matching guide) — not duplicated here as a second
+// /bids/compare route, since that would just be the same feature twice.
 const { Bid, Project, Contract } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const notificationService = require('../services/notificationService');
+const contractDocumentService = require('../services/contractDocumentService');
 
 const getAll = catchAsync(async (req, res) => {
   const { page = 1, limit = 20, projectId, contractorId, status } = req.query;
@@ -62,19 +67,16 @@ const updateStatus = catchAsync(async (req, res) => {
 
   let contract = null;
   if (status === 'accepted') {
-    const milestoneLines = project.milestones
-      .map((m, i) => `  ${i + 1}. ${m.name} — ${m.amount} ${project.currency} (released on approved evidence)`)
-      .join('\n');
-    const generatedDocumentText =
-      `MBOA TRUST — DIGITAL CONTRACT\n\n` +
-      `Project: ${project.title}\n` +
-      `Contractor: ${bid.contractorId}\n` +
-      `Total value: ${bid.price} ${project.currency}\n` +
-      `Proposed timeline: ${bid.timelineDays} days\n\n` +
-      `Payment milestones (held in escrow, released individually on verified proof):\n${milestoneLines}\n\n` +
-      `Platform fee applies per milestone release per the current fee schedule.\n` +
-      `Generated ${new Date().toISOString()}`;
-    contract = await Contract.create({ projectId: bid.projectId, bidId: bid._id, generatedDocumentText });
+    const { text: generatedDocumentText, url: generatedDocumentUrl } = await contractDocumentService.generateAndUploadContract({
+      project,
+      bid,
+    });
+    contract = await Contract.create({
+      projectId: bid.projectId,
+      bidId: bid._id,
+      generatedDocumentText,
+      generatedDocumentUrl,
+    });
     project.status = 'in_progress';
     await project.save();
     await Bid.updateMany(

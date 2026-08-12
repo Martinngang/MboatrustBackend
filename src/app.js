@@ -14,7 +14,13 @@ const app = express();
 app.use(helmet());
 app.use(cors({ origin: env.clientOrigins, credentials: true }));
 app.use(morgan(env.nodeEnv === 'production' ? 'combined' : 'dev'));
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({
+  limit: '2mb',
+  verify: (req, _res, buf) => {
+    // Capture raw body for webhook signature verification handlers (Stripe/Flutterwave)
+    req.rawBody = buf;
+  },
+}));
 app.use(express.urlencoded({ extended: true }));
 
 app.use(

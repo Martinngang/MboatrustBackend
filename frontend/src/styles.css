@@ -1,0 +1,11 @@
+:root{--bg:#f7f9fb;--card:#fff;--muted:#666;--accent:#0b66ff}
+body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial;color:#111;background:var(--bg);margin:0}
+.app-container{max-width:920px;margin:40px auto;padding:20px}
+h1{margin:0 0 12px}
+.payment-form{background:var(--card);padding:18px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.06)}
+.payment-form label{display:block;margin:8px 0;font-size:14px}
+.payment-form input, .payment-form select{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-top:6px}
+.actions{margin-top:12px}
+.card-wrapper{padding:10px;border:1px solid #dfe7f2;border-radius:6px;background:#fff;min-height:46px}
+.card-form button{margin-top:12px;background:var(--accent);color:#fff;border:none;padding:10px 14px;border-radius:6px;cursor:pointer}
+.status{margin-top:12px;color:var(--muted)}

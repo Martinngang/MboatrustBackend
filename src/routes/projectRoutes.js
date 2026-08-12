@@ -1,5 +1,7 @@
 const { Router } = require('express');
+const { z } = require('zod');
 const projectController = require('../controllers/projectController');
+const matchingController = require('../controllers/matchingController');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const upload = require('../middleware/upload');
@@ -19,9 +21,18 @@ router.get('/', projectController.getAll);
 router.get('/:id', projectController.getOne);
 router.post('/', authenticate, validate(createProject), projectController.create);
 router.patch('/:id', authenticate, validate(updateProject), projectController.update);
+router.post('/:id/cancel', authenticate, projectController.cancel);
 router.delete('/:id', authenticate, projectController.remove);
 
 router.get('/:id/funding-summary', projectController.getFundingSummary);
+router.post(
+  '/:id/co-signer',
+  authenticate,
+  validate(z.object({ coSignerId: z.string().min(1) })),
+  projectController.addCoSigner
+);
+router.get('/:projectId/recommended-contractors', authenticate, matchingController.getRecommended);
+router.get('/:projectId/bids-with-scores', authenticate, matchingController.getBidsWithScores);
 router.post('/:id/fund', authenticate, idempotent, validate(fundProject), projectController.fundProject);
 
 router.post(

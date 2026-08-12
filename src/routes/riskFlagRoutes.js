@@ -6,6 +6,7 @@ const router = Router();
 
 router.use(authenticate, requireRole('admin'));
 router.get('/', riskFlagController.getAll);
+router.get('/summary', riskFlagController.getSummary);
 router.get('/:id', riskFlagController.getOne);
 router.post('/', riskFlagController.create);
 

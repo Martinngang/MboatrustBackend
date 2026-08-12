@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { Project, Escrow, Dispute } = require('../models');
+const { Project, Escrow, Dispute, Bid, RiskFlag } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
@@ -9,7 +9,7 @@ const paymentService = require('../services/paymentService');
 const storageService = require('../services/storageService');
 const notificationService = require('../services/notificationService');
 const evidenceAnalysisService = require('../services/evidenceAnalysisService');
-const { RiskFlag } = require('../models');
+const referralService = require('../services/referralService');
 
 const getAll = catchAsync(async (req, res) => {
   const { page = 1, limit = 20, projectType, status, ownerId } = req.query;
@@ -21,6 +21,8 @@ const getAll = catchAsync(async (req, res) => {
   const [items, total] = await Promise.all([
     Project.find(filter)
       .populate('ownerId', 'fullName')
+      .populate('coSignerId', 'fullName')
+      .populate('milestones.approvers.userId', 'fullName')
       .sort('-createdAt')
       .skip((page - 1) * limit)
       .limit(Number(limit)),
@@ -30,7 +32,10 @@ const getAll = catchAsync(async (req, res) => {
 });
 
 const getOne = catchAsync(async (req, res) => {
-  const project = await Project.findById(req.params.id).populate('ownerId', 'fullName');
+  const project = await Project.findById(req.params.id)
+    .populate('ownerId', 'fullName')
+    .populate('coSignerId', 'fullName')
+    .populate('milestones.approvers.userId', 'fullName');
   if (!project) throw ApiError.notFound('Project not found');
   return ok(res, project);
 });
@@ -45,6 +50,34 @@ const create = catchAsync(async (req, res) => {
   });
   await project.populate('ownerId', 'fullName');
   return created(res, project);
+});
+
+/** Safe, real "close" — only permitted while the project has never received
+ * funds or awarded a bid (still 'draft'/'open'). Cancelling after that needs
+ * the real dispute/refund path, not a status flip, so this deliberately
+ * can't reach a funded/in_progress project. Any still-open bids on a
+ * cancelled tender are auto-rejected, mirroring bidController.updateStatus's
+ * own accept-path convention. */
+const cancel = catchAsync(async (req, res) => {
+  const project = await Project.findById(req.params.id);
+  if (!project) throw ApiError.notFound('Project not found');
+  if (String(project.ownerId) !== String(req.user._id)) throw ApiError.forbidden();
+  if (!['draft', 'open'].includes(project.status)) {
+    throw ApiError.conflict('Cannot cancel a project once it has received funds or awarded a bid');
+  }
+
+  project.status = 'cancelled';
+  await project.save();
+
+  const openBids = await Bid.find({ projectId: project._id, status: 'submitted' });
+  if (openBids.length > 0) {
+    await Bid.updateMany({ projectId: project._id, status: 'submitted' }, { status: 'rejected' });
+    await Promise.all(
+      openBids.map((b) => notificationService.notify(b.contractorId, 'bid_status_changed', { bidId: b._id, status: 'rejected' }))
+    );
+  }
+
+  return ok(res, project);
 });
 
 const update = catchAsync(async (req, res) => {
@@ -69,8 +102,10 @@ const remove = catchAsync(async (req, res) => {
 });
 
 /** Sum of completed escrow activity for a project, net of fees, used to derive "amount raised". */
-const getFundingSummary = catchAsync(async (req, res) => {
-  const projectId = req.params.id;
+/** Raw computation, factored out so groupController's dashboard can reuse it
+ * without duplicating the aggregation — the route handler below is just a
+ * thin wrapper. */
+async function getFundingSummaryData(projectId) {
   const rows = await Escrow.aggregate([
     { $match: { projectId: new mongoose.Types.ObjectId(projectId), status: 'completed' } },
     { $group: { _id: '$type', total: { $sum: '$netAmount' } } },
@@ -78,7 +113,12 @@ const getFundingSummary = catchAsync(async (req, res) => {
   const byType = Object.fromEntries(rows.map((r) => [r._id, r.total]));
   const raised = (byType.fund || 0) - (byType.refund || 0);
   const released = byType.release || 0;
-  return ok(res, { raised, released, escrowBalance: raised - released });
+  return { raised, released, escrowBalance: raised - released };
+}
+
+const getFundingSummary = catchAsync(async (req, res) => {
+  const summary = await getFundingSummaryData(req.params.id);
+  return ok(res, summary);
 });
 
 /**
@@ -138,13 +178,28 @@ const fundProject = catchAsync(async (req, res) => {
   // carries a payment_url the client must send the payer to. It isn't part of
   // the persisted Escrow record (ephemeral, only useful once), so it's merged
   // into the response body rather than added to the schema.
-  return created(res, paymentResult.paymentUrl ? { ...escrow.toObject(), paymentUrl: paymentResult.paymentUrl } : escrow);
+  const responseBody = {
+    ...escrow.toObject(),
+    ...(paymentResult.paymentUrl ? { paymentUrl: paymentResult.paymentUrl } : {}),
+    ...(paymentResult.clientSecret ? { clientSecret: paymentResult.clientSecret } : {}),
+  };
+  return created(res, responseBody);
 });
 
 async function releaseMilestoneEscrow(project, milestone) {
   const payoutCurrency = 'XAF';
   let conversion = null;
   let disbursementGross = milestone.amount;
+
+  // Tender projects have a real contractor party (whoever's Bid was
+  // accepted) — funding/land_purchase projects don't, so this stays null there.
+  let contractorId = null;
+  if (project.projectType === 'tender') {
+    const acceptedBid = await Bid.findOne({ projectId: project._id, status: 'accepted' })
+      .select('contractorId')
+      .lean();
+    contractorId = acceptedBid?.contractorId || null;
+  }
 
   if (project.currency !== payoutCurrency) {
     conversion = await conversionService.convertAmount(milestone.amount, project.currency, payoutCurrency);
@@ -162,6 +217,7 @@ async function releaseMilestoneEscrow(project, milestone) {
   const escrow = await Escrow.create({
     projectId: project._id,
     milestoneId: milestone._id,
+    contractorId,
     type: 'release',
     grossAmount: fee.grossAmount,
     feeBreakdown: { feeType: fee.feeType, feeRate: fee.feeRate, feeAmount: fee.feeAmount },
@@ -221,13 +277,48 @@ const submitEvidence = catchAsync(async (req, res) => {
   if (project.status === 'funded') project.status = 'in_progress';
   await project.save();
 
-  if (analysis.duplicateFlag) {
-    await RiskFlag.create({
+  // Broadened from duplicateFlag-only: a geotag that doesn't match the
+  // project's site, or a stale timestamp, is just as real a signal as a
+  // reused file — all three now create a flag, not just the one that
+  // happened to be wired up first. 'duplicate_geotag' was already declared
+  // in the schema for exactly this kind of geo/time mismatch and had never
+  // actually been triggered anywhere until now.
+  const heuristicFlagType = analysis.duplicateFlag
+    ? 'reused_evidence'
+    : analysis.locationMatch === false || analysis.timestampRecent === false
+    ? 'duplicate_geotag'
+    : null;
+
+  if (heuristicFlagType) {
+    const riskFlag = await RiskFlag.create({
       userId: req.user._id,
-      flagType: 'reused_evidence',
+      flagType: heuristicFlagType,
       severity: 'medium',
-      detail: { projectId: project._id, milestoneId, fileHash: analysis.fileHash },
+      detail: {
+        projectId: project._id,
+        milestoneId,
+        fileHash: analysis.fileHash,
+        locationMatch: analysis.locationMatch,
+        timestampRecent: analysis.timestampRecent,
+      },
     });
+
+    // AI second opinion — only ever augments this already-created flag
+    // (score + rationale, and severity can only go up), never creates its
+    // own flag or blocks the response if it fails/is unconfigured.
+    const aiOpinion = await evidenceAnalysisService.getAiSecondOpinion({
+      analysis,
+      project,
+      milestone,
+      fileUrl,
+      evidenceType: req.body.type,
+    });
+    if (aiOpinion) {
+      riskFlag.aiRiskScore = aiOpinion.riskScore;
+      riskFlag.aiRationale = aiOpinion.rationale;
+      if (aiOpinion.suspicious && riskFlag.severity !== 'high') riskFlag.severity = 'high';
+      await riskFlag.save();
+    }
   }
 
   await notificationService.notify(project.ownerId, 'milestone_evidence_submitted', {
@@ -237,6 +328,41 @@ const submitEvidence = catchAsync(async (req, res) => {
 
   return created(res, project);
 });
+
+/** Owner-only: designates the second required signer for this project's
+ * requiresMultiSig flag and any milestone with requiresCosigner. Replaces
+ * whichever co-signer was set before, if any — there is only ever one. */
+const addCoSigner = catchAsync(async (req, res) => {
+  const project = await Project.findById(req.params.id);
+  if (!project) throw ApiError.notFound('Project not found');
+  if (String(project.ownerId) !== String(req.user._id)) throw ApiError.forbidden();
+
+  const { coSignerId } = req.body;
+  const coSigner = await require('../models').User.findById(coSignerId);
+  if (!coSigner) throw ApiError.badRequest('No such user');
+  if (String(coSignerId) === String(project.ownerId)) {
+    throw ApiError.badRequest('The co-signer must be a different person than the project owner');
+  }
+
+  project.coSignerId = coSignerId;
+  await project.save();
+  await notificationService.notify(coSignerId, 'co_signer_added', { projectId: project._id });
+  await project.populate('coSignerId', 'fullName');
+  return ok(res, project);
+});
+
+/** Every userId that must have an 'approved' entry in milestone.approvers
+ * before it can move to approved/released. Plain single-approver default
+ * when neither flag is set — completely unchanged from before this prompt. */
+function requiredApproverIds(project, milestone) {
+  if (!milestone.requiresCosigner && !project.requiresMultiSig) return null; // "any one approver" path
+  if (!project.coSignerId) {
+    throw ApiError.conflict(
+      'This milestone requires a co-signer, but none has been added to this project yet — add one via POST /projects/:id/co-signer first.'
+    );
+  }
+  return [String(project.ownerId), String(project.coSignerId)];
+}
 
 /**
  * Records an approver's decision. Auto-registers the acting user as an
@@ -254,6 +380,11 @@ const decideApproval = catchAsync(async (req, res) => {
     throw ApiError.conflict(`Milestone is not awaiting approval (status "${milestone.status}")`);
   }
 
+  const required = requiredApproverIds(project, milestone);
+  if (required && !required.includes(String(req.user._id))) {
+    throw ApiError.forbidden('Only the project owner or its designated co-signer may decide this milestone');
+  }
+
   let approver = milestone.approvers.find((a) => String(a.userId) === String(req.user._id));
   if (!approver) {
     milestone.approvers.push({ userId: req.user._id, status, decidedAt: new Date() });
@@ -265,7 +396,18 @@ const decideApproval = catchAsync(async (req, res) => {
   let releasedEscrow = null;
   if (status === 'rejected') {
     milestone.status = 'disputed';
+  } else if (required) {
+    // Co-signer / multi-sig path: every required identity (owner + co-signer)
+    // must have its own 'approved' entry — one person approving is not enough.
+    const allRequiredApproved = required.every((uid) =>
+      milestone.approvers.some((a) => String(a.userId) === uid && a.status === 'approved')
+    );
+    if (allRequiredApproved) {
+      milestone.status = 'approved';
+      releasedEscrow = await releaseMilestoneEscrow(project, milestone);
+    }
   } else {
+    // Original single-approver default, unchanged.
     const allApproved =
       milestone.approvers.length > 0 && milestone.approvers.every((a) => a.status === 'approved');
     if (allApproved || milestone.approvers.length === 0) {
@@ -275,6 +417,7 @@ const decideApproval = catchAsync(async (req, res) => {
   }
 
   const allReleased = project.milestones.every((m) => m.status === 'released');
+  const justCompleted = allReleased && project.status !== 'completed';
   if (allReleased) project.status = 'completed';
 
   await project.save();
@@ -284,6 +427,22 @@ const decideApproval = catchAsync(async (req, res) => {
     milestoneId,
     status: milestone.status,
   });
+
+  if (justCompleted) {
+    // A prompt, not an auto-generated rating — never fabricate one on
+    // someone's behalf. Reward the referrer of whichever party just
+    // finished their side of the work, if either was ever referred.
+    await notificationService.notify(project.ownerId, 'rating_prompt', { projectId: project._id });
+    await referralService.maybeRewardReferral(project.ownerId);
+
+    if (project.projectType === 'tender') {
+      const acceptedBid = await Bid.findOne({ projectId: project._id, status: 'accepted' }).select('contractorId').lean();
+      if (acceptedBid) {
+        await notificationService.notify(acceptedBid.contractorId, 'rating_prompt', { projectId: project._id });
+        await referralService.maybeRewardReferral(acceptedBid.contractorId);
+      }
+    }
+  }
 
   return ok(res, { project, releasedEscrow });
 });
@@ -318,10 +477,13 @@ module.exports = {
   getOne,
   create,
   update,
+  cancel,
   remove,
   getFundingSummary,
   fundProject,
   submitEvidence,
   decideApproval,
   disputeMilestone,
+  addCoSigner,
+  getFundingSummaryData,
 };

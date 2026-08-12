@@ -1,4 +1,4 @@
-const { haversineMeters } = require('./evidenceAnalysisService');
+const { haversineDistanceMeters } = require('../utils/geo');
 const { LandListing } = require('../models');
 
 const PROXIMITY_RADIUS_M = 150; // two listings this close claiming similar size are very likely the same plot
@@ -23,7 +23,7 @@ async function findDuplicate(listing) {
     .lean();
 
   for (const other of candidates) {
-    const distance = haversineMeters(listing.location, other.location);
+    const distance = haversineDistanceMeters(listing.location, other.location);
     if (distance > PROXIMITY_RADIUS_M) continue;
     const sizeDiff = Math.abs(listing.sizeSqm - other.sizeSqm) / Math.max(listing.sizeSqm, other.sizeSqm, 1);
     if (sizeDiff <= SIZE_TOLERANCE) return other._id;

@@ -73,6 +73,11 @@ const ProjectSchema = new Schema(
       default: 'draft',
     },
     requiresMultiSig: { type: Boolean, default: false },
+    // The second required signer for requiresMultiSig / any milestone with
+    // requiresCosigner — null until the owner adds one via POST
+    // /projects/:id/co-signer. No pre-existing co-signer identity concept
+    // existed anywhere in the schema before this field.
+    coSignerId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     milestones: { type: [MilestoneSchema], default: [] },
   },
   { timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' } }

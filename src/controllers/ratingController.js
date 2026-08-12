@@ -13,6 +13,7 @@ const getAll = catchAsync(async (req, res) => {
 
   const [items, total] = await Promise.all([
     Rating.find(filter)
+      .populate('fromUserId', 'fullName')
       .sort('-createdAt')
       .skip((page - 1) * limit)
       .limit(Number(limit)),

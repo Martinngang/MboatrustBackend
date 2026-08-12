@@ -7,9 +7,14 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "seed:fees": "node src/scripts/seedFeeConfig.js"
+    "seed:fees": "node src/scripts/seedFeeConfig.js",
+    "verify:ai-features": "node src/scripts/verifyFraudAndMatching.js",
+    "charge:recurring-contributions": "node src/scripts/chargeRecurringContributions.js",
+    "charge:subscription-renewals": "node src/scripts/chargeSubscriptionRenewals.js",
+    "verify:full-backend": "node src/scripts/verifyFullBackend.js"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "axios": "^1.19.0",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^2.4.0",
@@ -25,6 +30,7 @@
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
     "socket.io": "^4.7.5",
+    "stripe": "^22.4.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
