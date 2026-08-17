@@ -72,7 +72,13 @@ const stripeWebhook = catchAsync(async (req, res) => {
  * Flutterwave webhook handler — basic HMAC verification using FLW secret if provided
  */
 const flutterwaveWebhook = catchAsync(async (req, res) => {
-  const raw = req.body; // express.raw middleware provides Buffer
+  // NOT req.body — the global express.json() in app.js already parses and
+  // drains the request body for every /api/v1 route before this handler's
+  // own express.raw() middleware ever runs, so req.body is a parsed object
+  // here, not the raw bytes signature verification needs. req.rawBody is
+  // the same buffer express.json()'s `verify` hook captures for the Stripe
+  // webhook (see app.js) — reusing it here is what actually works.
+  const raw = req.rawBody || Buffer.from(JSON.stringify(req.body));
   const signature = req.headers['verif-hash'] || req.headers['x-flw-signature'];
 
   if (env.flutterwave.secretKey && signature) {
