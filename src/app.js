@@ -30,6 +30,14 @@ app.use(
     limit: 300,
     standardHeaders: true,
     legacyHeaders: false,
+    // Default handler sends a plain-text body — every other error response
+    // in this API is { success: false, error: { message } } (see
+    // errorHandler.js), and apiErrorMessage() on the frontend expects that
+    // shape. Without this, a 429 still degrades safely (falls back to a
+    // generic axios message) but loses the actual "try again later" text.
+    handler: (req, res) => {
+      res.status(429).json({ success: false, error: { message: 'Too many requests — please try again in a few minutes.' } });
+    },
   })
 );
 
