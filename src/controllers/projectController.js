@@ -197,6 +197,18 @@ const fundProject = catchAsync(async (req, res) => {
 });
 
 async function releaseMilestoneEscrow(project, milestone) {
+  // Closes (though the unique index below is the hard guarantee) the window
+  // where two genuinely concurrent decideApproval calls both pass the
+  // caller's status check and both reach here — without this, both would go
+  // on to make a REAL disbursement API call and create two release escrows
+  // for the same milestone, a real double-payout. Checked as early as
+  // possible, before any side-effecting work.
+  const existingRelease = await Escrow.findOne({ milestoneId: milestone._id, type: 'release' });
+  if (existingRelease) {
+    milestone.status = 'released';
+    return existingRelease;
+  }
+
   const payoutCurrency = 'XAF';
   let conversion = null;
   let disbursementGross = milestone.amount;
@@ -224,21 +236,35 @@ async function releaseMilestoneEscrow(project, milestone) {
     externalId: `release_${project._id}_${milestone._id}`,
   });
 
-  const escrow = await Escrow.create({
-    projectId: project._id,
-    milestoneId: milestone._id,
-    contractorId,
-    type: 'release',
-    grossAmount: fee.grossAmount,
-    feeBreakdown: { feeType: fee.feeType, feeRate: fee.feeRate, feeAmount: fee.feeAmount },
-    netAmount: fee.netAmount,
-    currency: payoutCurrency,
-    paymentProvider: 'mtn_momo',
-    providerRole: 'disbursement',
-    providerReference: paymentResult.providerReference,
-    currencyConversion: conversion,
-    status: paymentResult.status,
-  });
+  let escrow;
+  try {
+    escrow = await Escrow.create({
+      projectId: project._id,
+      milestoneId: milestone._id,
+      contractorId,
+      type: 'release',
+      grossAmount: fee.grossAmount,
+      feeBreakdown: { feeType: fee.feeType, feeRate: fee.feeRate, feeAmount: fee.feeAmount },
+      netAmount: fee.netAmount,
+      currency: payoutCurrency,
+      paymentProvider: 'mtn_momo',
+      providerRole: 'disbursement',
+      providerReference: paymentResult.providerReference,
+      currencyConversion: conversion,
+      status: paymentResult.status,
+    });
+  } catch (err) {
+    // The early check above already handles the common case — this only
+    // fires in the rare true-simultaneous race that slips past it. The
+    // unique index (see Escrow.js) is what actually guarantees no duplicate
+    // ledger entry, not this catch; a real disbursement call may still have
+    // already fired for the losing request, which is a payment-provider-side
+    // limitation this codebase has no atomic primitive to prevent — but the
+    // ledger itself stays correct, which is what matters for what gets paid
+    // out from here on.
+    if (err.code !== 11000) throw err;
+    escrow = await Escrow.findOne({ milestoneId: milestone._id, type: 'release' });
+  }
 
   milestone.status = 'released';
   return escrow;
@@ -385,17 +411,17 @@ function requiredApproverIds(project, milestone) {
  * approver on first decision (e.g. the funder reviewing evidence) rather
  * than requiring a separate pre-assignment step.
  */
-const decideApproval = catchAsync(async (req, res) => {
-  const { id, milestoneId } = req.params;
-  const { status } = req.body;
-  const project = await Project.findById(id);
-  if (!project) throw ApiError.notFound('Project not found');
-  const milestone = project.milestones.id(milestoneId);
-  if (!milestone) throw ApiError.notFound('Milestone not found');
+/** The actual decision logic, applied to an already-loaded project/milestone
+ * — factored out so decideApproval can re-apply it to a freshly-reloaded
+ * document on a concurrent-write conflict (see the retry loop below) without
+ * duplicating the rules for what "this user approved" means on top of a
+ * document someone else already modified. */
+async function applyApprovalDecision(req, project, milestone) {
   if (milestone.status !== 'under_review' && milestone.status !== 'submitted') {
     throw ApiError.conflict(`Milestone is not awaiting approval (status "${milestone.status}")`);
   }
 
+  const { status } = req.body;
   const required = requiredApproverIds(project, milestone);
   if (required && !required.includes(String(req.user._id))) {
     throw ApiError.forbidden('Only the project owner or its designated co-signer may decide this milestone');
@@ -436,7 +462,38 @@ const decideApproval = catchAsync(async (req, res) => {
   const justCompleted = allReleased && project.status !== 'completed';
   if (allReleased) project.status = 'completed';
 
-  await project.save();
+  return { releasedEscrow, justCompleted };
+}
+
+const decideApproval = catchAsync(async (req, res) => {
+  const { id, milestoneId } = req.params;
+
+  // Two genuinely concurrent decisions on the same milestone (a double-tap,
+  // a client retry, or a real multi-sig owner+co-signer race) both load the
+  // same project document — Mongoose's version check on save() means only
+  // the first one to save can win, and the second would otherwise surface a
+  // raw VersionError as an unhandled 500. Retrying against a freshly-loaded
+  // document re-applies THIS request's own decision on top of whatever the
+  // other one already committed, rather than silently dropping it — that
+  // matters for multi-sig, where the loser's approval is real, distinct
+  // information, not a duplicate of the winner's.
+  const MAX_ATTEMPTS = 3;
+  let project, milestone, releasedEscrow, justCompleted;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    project = await Project.findById(id);
+    if (!project) throw ApiError.notFound('Project not found');
+    milestone = project.milestones.id(milestoneId);
+    if (!milestone) throw ApiError.notFound('Milestone not found');
+
+    ({ releasedEscrow, justCompleted } = await applyApprovalDecision(req, project, milestone));
+
+    try {
+      await project.save();
+      break;
+    } catch (err) {
+      if (err.name !== 'VersionError' || attempt === MAX_ATTEMPTS) throw err;
+    }
+  }
 
   await notificationService.notify(project.ownerId, 'milestone_decision', {
     projectId: project._id,

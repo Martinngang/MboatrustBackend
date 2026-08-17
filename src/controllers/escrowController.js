@@ -50,6 +50,16 @@ const refund = catchAsync(async (req, res) => {
     throw ApiError.conflict('Only a completed fund transaction can be refunded');
   }
 
+  // Two concurrent refund requests for the same original transaction (a
+  // double-click, two admins acting at once) would otherwise both pass the
+  // check above, both make a real disbursement call, and both create a
+  // refund record — a real double-refund. Checked as early as possible,
+  // before any side-effecting work; the unique index on Escrow (see
+  // models/Escrow.js) is the hard guarantee for the rare case that slips
+  // past this.
+  const existingRefund = await Escrow.findOne({ originalEscrowId: original._id, type: 'refund' });
+  if (existingRefund) return created(res, existingRefund);
+
   const project = await Project.findById(original.projectId);
   const fee = await feeService.calculateFee('refund', original.netAmount, original.currency);
   const paymentResult = await paymentService.disburse(original.paymentProvider, {
@@ -59,19 +69,26 @@ const refund = catchAsync(async (req, res) => {
     externalId: `refund_${original._id}`,
   });
 
-  const refundEscrow = await Escrow.create({
-    projectId: original.projectId,
-    milestoneId: original.milestoneId,
-    type: 'refund',
-    grossAmount: fee.grossAmount,
-    feeBreakdown: { feeType: fee.feeType, feeRate: fee.feeRate, feeAmount: fee.feeAmount },
-    netAmount: fee.netAmount,
-    currency: original.currency,
-    paymentProvider: original.paymentProvider,
-    providerRole: 'disbursement',
-    providerReference: paymentResult.providerReference,
-    status: paymentResult.status,
-  });
+  let refundEscrow;
+  try {
+    refundEscrow = await Escrow.create({
+      projectId: original.projectId,
+      milestoneId: original.milestoneId,
+      originalEscrowId: original._id,
+      type: 'refund',
+      grossAmount: fee.grossAmount,
+      feeBreakdown: { feeType: fee.feeType, feeRate: fee.feeRate, feeAmount: fee.feeAmount },
+      netAmount: fee.netAmount,
+      currency: original.currency,
+      paymentProvider: original.paymentProvider,
+      providerRole: 'disbursement',
+      providerReference: paymentResult.providerReference,
+      status: paymentResult.status,
+    });
+  } catch (err) {
+    if (err.code !== 11000) throw err;
+    return created(res, await Escrow.findOne({ originalEscrowId: original._id, type: 'refund' }));
+  }
 
   if (project && paymentResult.status === 'completed') {
     original.status = 'reversed';
