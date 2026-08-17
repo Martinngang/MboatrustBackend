@@ -4,6 +4,7 @@ const EvidenceSchema = new Schema(
   {
     type: { type: String, enum: ['photo', 'video'], required: true },
     fileUrl: { type: String, required: true },
+    notes: { type: String, default: '', trim: true },
     geotag: {
       lat: { type: Number, default: null },
       lng: { type: Number, default: null },

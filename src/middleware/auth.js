@@ -33,41 +33,27 @@ function parseAuthProviders(decoded) {
 }
 
 /**
- * Verifies the Firebase ID token sent as `Authorization: Bearer <token>`
- * and attaches the corresponding local User document as req.user,
- * creating one on first sign-in ("just-in-time" user provisioning").
- *
- * Dev-only escape hatch: when DEV_AUTH_BYPASS=true and no Authorization
- * header is present, a `x-dev-user-id` header is used directly as the
- * Mongo user _id. Never enable this in production.
+ * Core identity resolution shared by the HTTP `authenticate` middleware and
+ * the Socket.IO connection handler (see server.js) — verifies a Firebase ID
+ * token, or (dev-only) trusts an `x-dev-user-id`-style value directly, and
+ * returns the corresponding local User document, JIT-provisioning one on
+ * first sign-in. Returns `null` for any failure instead of throwing, so
+ * callers can decide how to react (HTTP 401 vs. dropping a socket).
  */
-const authenticate = catchAsync(async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-
+async function resolveUser({ authHeader, devUserId }) {
   if (!authHeader && devAuthBypass) {
-    const devUserId = req.headers['x-dev-user-id'];
-    if (!devUserId) {
-      throw ApiError.unauthorized('DEV_AUTH_BYPASS is on but x-dev-user-id header is missing');
-    }
-    const user = await User.findById(devUserId);
-    if (!user) throw ApiError.unauthorized('No such dev user');
-    req.user = user;
-    return next();
+    if (!devUserId) return null;
+    return User.findById(devUserId).catch(() => null);
   }
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    throw ApiError.unauthorized('Missing Authorization header');
-  }
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
 
   const admin = initFirebase();
-  if (!admin) {
-    throw ApiError.unauthorized('Auth is not configured on this server');
-  }
+  if (!admin) return null;
 
   const idToken = authHeader.slice('Bearer '.length);
-  const decoded = await admin.auth().verifyIdToken(idToken).catch(() => {
-    throw ApiError.unauthorized('Invalid or expired token');
-  });
+  const decoded = await admin.auth().verifyIdToken(idToken).catch(() => null);
+  if (!decoded) return null;
 
   const providers = parseAuthProviders(decoded);
   let user = await User.findOne({ firebaseUid: decoded.uid });
@@ -95,6 +81,49 @@ const authenticate = catchAsync(async (req, res, next) => {
     }
   }
 
+  return user;
+}
+
+/**
+ * Verifies the Firebase ID token sent as `Authorization: Bearer <token>`
+ * and attaches the corresponding local User document as req.user,
+ * creating one on first sign-in ("just-in-time" user provisioning").
+ *
+ * Dev-only escape hatch: when DEV_AUTH_BYPASS=true and no Authorization
+ * header is present, a `x-dev-user-id` header is used directly as the
+ * Mongo user _id. Never enable this in production.
+ */
+const authenticate = catchAsync(async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  const devUserId = req.headers['x-dev-user-id'];
+
+  if (!authHeader && devAuthBypass) {
+    if (!devUserId) {
+      throw ApiError.unauthorized('DEV_AUTH_BYPASS is on but x-dev-user-id header is missing');
+    }
+    const user = await resolveUser({ authHeader, devUserId });
+    if (!user) throw ApiError.unauthorized('No such dev user');
+    if (!user.isActive) throw ApiError.forbidden('This account has been deactivated');
+    req.user = user;
+    return next();
+  }
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    throw ApiError.unauthorized('Missing Authorization header');
+  }
+
+  if (!initFirebase()) {
+    throw ApiError.unauthorized('Auth is not configured on this server');
+  }
+
+  const user = await resolveUser({ authHeader, devUserId });
+  if (!user) throw ApiError.unauthorized('Invalid or expired token');
+  // admin.deactivate() (see userController.js) previously only flipped this
+  // flag for display — nothing ever checked it, so a deactivated account
+  // could keep transacting normally as long as its Firebase token was
+  // still valid.
+  if (!user.isActive) throw ApiError.forbidden('This account has been deactivated');
+
   req.user = user;
   next();
 });
@@ -108,4 +137,4 @@ function requireRole(...roleTypes) {
   };
 }
 
-module.exports = { authenticate, requireRole };
+module.exports = { authenticate, requireRole, resolveUser };

@@ -2,6 +2,7 @@ const { Dispute, Project, RiskFlag } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
+const notificationService = require('../services/notificationService');
 
 const MULTIPLE_DISPUTES_THRESHOLD = 3;
 
@@ -58,6 +59,13 @@ const create = catchAsync(async (req, res) => {
 
   const dispute = await Dispute.create({ ...req.body, raisedBy: req.user._id });
 
+  if (String(project.ownerId) !== String(req.user._id)) {
+    await notificationService.notify(project.ownerId, 'dispute_raised', {
+      projectId: project._id,
+      disputeId: dispute._id,
+    });
+  }
+
   // Flag the project owner once their projects have accumulated enough
   // disputes to be a real pattern rather than a one-off — only once, not
   // re-raised on every subsequent dispute past the threshold.
@@ -97,6 +105,14 @@ const resolve = catchAsync(async (req, res) => {
       if (project.status === 'disputed') project.status = 'in_progress';
       await project.save();
     }
+  }
+
+  if (String(dispute.raisedBy) !== String(req.user._id)) {
+    await notificationService.notify(dispute.raisedBy, 'dispute_resolved', {
+      disputeId: dispute._id,
+      projectId: dispute.projectId,
+      status: dispute.status,
+    });
   }
 
   return ok(res, dispute);

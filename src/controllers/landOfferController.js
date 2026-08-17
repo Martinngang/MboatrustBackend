@@ -10,6 +10,7 @@ const create = catchAsync(async (req, res) => {
   if (!listing) throw ApiError.notFound('Land listing not found');
   if (listing.verificationStatus !== 'verified') throw ApiError.conflict('Only a verified listing can receive offers');
   if (listing.linkedProjectId) throw ApiError.conflict('This listing already has an active purchase in progress');
+  if (String(listing.sellerId) === String(req.user._id)) throw ApiError.badRequest('Cannot make an offer on your own listing');
 
   const offer = await LandOffer.create({
     listingId: listing._id,

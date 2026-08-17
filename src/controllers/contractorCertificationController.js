@@ -2,6 +2,7 @@ const { ContractorCertification } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
+const storageService = require('../services/storageService');
 
 /** Admin review queue — every contractor's certifications, not just one
  * user's (getMine/getForUser). Optional `verified`/`rejected` filters so the
@@ -34,7 +35,14 @@ const getForUser = catchAsync(async (req, res) => {
 });
 
 const create = catchAsync(async (req, res) => {
-  const cert = await ContractorCertification.create({ ...req.body, userId: req.user._id });
+  let documentUrl = req.body.documentUrl;
+  if (req.file) {
+    const uploadResult = await storageService.uploadBuffer(req.file.buffer, {
+      folder: `mboatrust/certifications/${req.user._id}`,
+    });
+    documentUrl = uploadResult.secure_url;
+  }
+  const cert = await ContractorCertification.create({ ...req.body, documentUrl, userId: req.user._id });
   return created(res, cert);
 });
 

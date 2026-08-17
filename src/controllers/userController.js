@@ -1,4 +1,4 @@
-const { User, Project, LandListing, LandOffer, Bid, Rating, ContractorProfile } = require('../models');
+const { User, Project, LandListing, LandOffer, Bid, Rating, ContractorProfile, Conversation, Message, Dispute, Notification, Referral } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
@@ -119,7 +119,11 @@ const revokeRole = catchAsync(async (req, res) => {
  * promised an email nothing ever sent. */
 const exportMyData = catchAsync(async (req, res) => {
   const uid = req.user._id;
-  const [projects, landListings, landOffers, bids, ratingsGiven, ratingsReceived, contractorProfile] = await Promise.all([
+  const conversations = await Conversation.find({ participantIds: uid }).lean();
+  const [
+    projects, landListings, landOffers, bids, ratingsGiven, ratingsReceived, contractorProfile,
+    messages, disputesRaised, notifications, referrals,
+  ] = await Promise.all([
     Project.find({ ownerId: uid }).lean(),
     LandListing.find({ sellerId: uid }).lean(),
     LandOffer.find({ buyerId: uid }).lean(),
@@ -127,6 +131,10 @@ const exportMyData = catchAsync(async (req, res) => {
     Rating.find({ fromUserId: uid }).lean(),
     Rating.find({ toUserId: uid }).lean(),
     ContractorProfile.findOne({ userId: uid }).lean(),
+    Message.find({ conversationId: { $in: conversations.map((c) => c._id) } }).lean(),
+    Dispute.find({ raisedBy: uid }).lean(),
+    Notification.find({ userId: uid }).lean(),
+    Referral.find({ $or: [{ referrerId: uid }, { referredId: uid }] }).lean(),
   ]);
   return ok(res, {
     exportedAt: new Date().toISOString(),
@@ -138,6 +146,11 @@ const exportMyData = catchAsync(async (req, res) => {
     ratingsGiven,
     ratingsReceived,
     contractorProfile,
+    conversations,
+    messages,
+    disputesRaised,
+    notifications,
+    referrals,
   });
 });
 

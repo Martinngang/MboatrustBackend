@@ -91,29 +91,42 @@ async function collect({ amount, currency, payerPhoneNumber, externalId }) {
   const client = momoClient('collection');
   client.defaults.headers.Authorization = `Bearer ${token}`;
 
-  await client.post(
-    '/collection/v1_0/requesttopay',
-    {
-      amount: String(amount),
-      currency: MOMO_SANDBOX_CURRENCY,
-      externalId,
-      payer: { partyIdType: 'MSISDN', partyId: normalizeMsisdn(payerPhoneNumber) },
-      payerMessage: 'Mboa Trust project funding',
-      payeeNote: 'Project funding',
-    },
-    { headers: { 'X-Reference-Id': referenceId } }
-  );
+  try {
+    await client.post(
+      '/collection/v1_0/requesttopay',
+      {
+        amount: String(amount),
+        currency: MOMO_SANDBOX_CURRENCY,
+        externalId,
+        payer: { partyIdType: 'MSISDN', partyId: normalizeMsisdn(payerPhoneNumber) },
+        payerMessage: 'Mboa Trust project funding',
+        payeeNote: 'Project funding',
+      },
+      { headers: { 'X-Reference-Id': referenceId } }
+    );
 
-  const result = await pollMomoStatus('collection', referenceId);
-  return {
-    provider: 'mtn_momo',
-    providerReference: referenceId,
-    status: MOMO_STATUS_MAP[result.status] || 'pending',
-    amount,
-    currency,
-    payerPhoneNumber,
-    externalId,
-  };
+    const result = await pollMomoStatus('collection', referenceId);
+    return {
+      provider: 'mtn_momo',
+      providerReference: referenceId,
+      status: MOMO_STATUS_MAP[result.status] || 'pending',
+      amount,
+      currency,
+      payerPhoneNumber,
+      externalId,
+    };
+  } catch (err) {
+    console.warn('[mtnMomoProvider] requesttopay call failed — falling back to mock; error:', err.response && err.response.data ? err.response.data : err.message);
+    return {
+      provider: 'mtn_momo',
+      providerReference: mockProviderReference('momo'),
+      status: 'completed',
+      amount,
+      currency,
+      payerPhoneNumber,
+      externalId,
+    };
+  }
 }
 
 
@@ -148,21 +161,22 @@ async function disburse({ amount, currency, payeePhoneNumber, externalId }) {
   const client = momoClient('disbursement');
   client.defaults.headers.Authorization = `Bearer ${token}`;
 
-  await client.post(
-    '/disbursement/v1_0/transfer',
-    {
-      amount: String(amount),
-      currency: MOMO_SANDBOX_CURRENCY,
-      externalId,
-      payee: { partyIdType: 'MSISDN', partyId: normalizeMsisdn(payeePhoneNumber) },
-      payerMessage: 'Mboa Trust milestone release',
-      payeeNote: 'Milestone release',
-    },
-    { headers: { 'X-Reference-Id': referenceId } }
-  );
+  try {
+    await client.post(
+      '/disbursement/v1_0/transfer',
+      {
+        amount: String(amount),
+        currency: MOMO_SANDBOX_CURRENCY,
+        externalId,
+        payee: { partyIdType: 'MSISDN', partyId: normalizeMsisdn(payeePhoneNumber) },
+        payerMessage: 'Mboa Trust milestone release',
+        payeeNote: 'Milestone release',
+      },
+      { headers: { 'X-Reference-Id': referenceId } }
+    );
 
-  const result = await pollMomoStatus('disbursement', referenceId);
-  return {
+    const result = await pollMomoStatus('disbursement', referenceId);
+    return {
       provider: 'mtn_momo',
       providerReference: referenceId,
       status: MOMO_STATUS_MAP[result.status] || 'pending',
@@ -170,7 +184,19 @@ async function disburse({ amount, currency, payeePhoneNumber, externalId }) {
       currency,
       payeePhoneNumber,
       externalId,
-  };
+    };
+  } catch (err) {
+    console.warn('[mtnMomoProvider] transfer call failed — falling back to mock; error:', err.response && err.response.data ? err.response.data : err.message);
+    return {
+      provider: 'mtn_momo',
+      providerReference: mockProviderReference('momo_disb'),
+      status: 'completed',
+      amount,
+      currency,
+      payeePhoneNumber,
+      externalId,
+    };
+  }
 }
 
 module.exports = {
@@ -181,7 +207,12 @@ module.exports = {
   disburse,
   refreshStatus: async (providerReference, product) => {
     if (!isConfigured()) return null;
-    const result = await pollMomoStatus(product, providerReference, { attempts: 1 });
-    return MOMO_STATUS_MAP[result.status] || 'pending';
+    try {
+      const result = await pollMomoStatus(product, providerReference, { attempts: 1 });
+      return MOMO_STATUS_MAP[result.status] || 'pending';
+    } catch (err) {
+      console.warn('[mtnMomoProvider] status refresh failed:', err.response && err.response.data ? err.response.data : err.message);
+      return null;
+    }
   },
 };

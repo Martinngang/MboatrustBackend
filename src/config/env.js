@@ -12,6 +12,17 @@ module.exports = {
   // production for the notif_url webhook to work.
   appBaseUrl: process.env.APP_BASE_URL || 'http://localhost:5000',
 
+  // Express's `trust proxy` — off (false) by default, matching Express's own
+  // safe default. Deployed behind exactly one reverse proxy (Render, Heroku,
+  // Railway, a single nginx hop — the standard topology), this MUST be set
+  // to "1" or req.ip silently becomes the proxy's own address for every
+  // request: the rate limiter (see app.js) keys on req.ip, so every distinct
+  // user gets bucketed together under one shared limit instead of their own.
+  // Only set this to the real number of trusted proxy hops in front of the
+  // app — trusting a hop that isn't really there lets a client spoof its own
+  // X-Forwarded-For header and bypass IP-based rate limiting entirely.
+  trustProxy: process.env.TRUST_PROXY ? (Number.isNaN(Number(process.env.TRUST_PROXY)) ? process.env.TRUST_PROXY : Number(process.env.TRUST_PROXY)) : false,
+
   mongodbUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/mboatrust',
 
   firebase: {

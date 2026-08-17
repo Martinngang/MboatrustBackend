@@ -2,7 +2,7 @@
 // GET /projects/:projectId/bids-with-scores (matchingController.js, added
 // by the fraud/matching guide) — not duplicated here as a second
 // /bids/compare route, since that would just be the same feature twice.
-const { Bid, Project, Contract } = require('../models');
+const { Bid, Project, Contract, User } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
@@ -67,9 +67,19 @@ const updateStatus = catchAsync(async (req, res) => {
 
   let contract = null;
   if (status === 'accepted') {
+    // Separate lookups rather than populating `bid`/`project` themselves —
+    // those are reused above for the raw-ObjectId auth checks
+    // (`String(bid.contractorId) === ...`), which a populated field would
+    // silently break.
+    const [contractor, owner] = await Promise.all([
+      User.findById(bid.contractorId).select('fullName'),
+      User.findById(project.ownerId).select('fullName'),
+    ]);
     const { text: generatedDocumentText, url: generatedDocumentUrl } = await contractDocumentService.generateAndUploadContract({
       project,
       bid,
+      contractorName: contractor?.fullName || String(bid.contractorId),
+      ownerName: owner?.fullName || String(project.ownerId),
     });
     contract = await Contract.create({
       projectId: bid.projectId,

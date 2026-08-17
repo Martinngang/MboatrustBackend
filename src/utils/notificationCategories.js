@@ -18,10 +18,7 @@ function defaultPrefsObject() {
 }
 
 // Every notificationService.notify() call site's `type` string, mapped to
-// the category a user actually toggles. 'disputes' has no mapped type yet —
-// disputeController.js doesn't call notify() at all today, a separate,
-// pre-existing gap outside this prompt's scope — the category still exists
-// here so preferences for it are storable/settable in advance.
+// the category a user actually toggles.
 const TYPE_TO_CATEGORY = {
   bid_received: 'bids',
   bid_status_changed: 'bids',
@@ -41,6 +38,8 @@ const TYPE_TO_CATEGORY = {
   land_purchase_started: 'land',
   visit_confirmed: 'land',
   visit_requested: 'land',
+  dispute_raised: 'disputes',
+  dispute_resolved: 'disputes',
 };
 
 function categoryForType(type) {

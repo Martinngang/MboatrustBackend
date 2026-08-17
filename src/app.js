@@ -11,6 +11,7 @@ const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 
 const app = express();
 
+app.set('trust proxy', env.trustProxy);
 app.use(helmet());
 app.use(cors({ origin: env.clientOrigins, credentials: true }));
 app.use(morgan(env.nodeEnv === 'production' ? 'combined' : 'dev'));

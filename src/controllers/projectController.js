@@ -107,7 +107,17 @@ const remove = catchAsync(async (req, res) => {
  * thin wrapper. */
 async function getFundingSummaryData(projectId) {
   const rows = await Escrow.aggregate([
-    { $match: { projectId: new mongoose.Types.ObjectId(projectId), status: 'completed' } },
+    {
+      $match: {
+        projectId: new mongoose.Types.ObjectId(projectId),
+        // A refunded fund transaction is flipped to 'reversed' (see
+        // escrowController.refund) purely to block a second refund of the
+        // same transaction — it still represents money that was actually
+        // collected, so it must stay in the 'fund' sum or its paired
+        // 'refund' entry double-subtracts and pushes "raised" negative.
+        $or: [{ status: 'completed' }, { type: 'fund', status: 'reversed' }],
+      },
+    },
     { $group: { _id: '$type', total: { $sum: '$netAmount' } } },
   ]);
   const byType = Object.fromEntries(rows.map((r) => [r._id, r.total]));
@@ -241,7 +251,12 @@ const submitEvidence = catchAsync(async (req, res) => {
   if (!project) throw ApiError.notFound('Project not found');
   const milestone = project.milestones.id(milestoneId);
   if (!milestone) throw ApiError.notFound('Milestone not found');
-  if (!['pending', 'submitted', 'disputed'].includes(milestone.status)) {
+  // 'under_review' is included because a milestone's status flips there as
+  // soon as its *first* evidence entry lands — a multi-photo submission is
+  // one POST per file (see submitMilestoneProof on the frontend), so every
+  // photo after the first would otherwise 409 against the status its own
+  // predecessor just set.
+  if (!['pending', 'submitted', 'under_review', 'disputed'].includes(milestone.status)) {
     throw ApiError.conflict(`Cannot submit evidence for a milestone in status "${milestone.status}"`);
   }
 
@@ -264,6 +279,7 @@ const submitEvidence = catchAsync(async (req, res) => {
   milestone.evidence.push({
     type: req.body.type,
     fileUrl,
+    notes: req.body.notes || '',
     geotag: analysis.geotag,
     fileHash: analysis.fileHash,
     locationMatch: analysis.locationMatch,

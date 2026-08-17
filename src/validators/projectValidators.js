@@ -41,6 +41,7 @@ const fundProject = z.object({
 const submitEvidence = z.object({
   type: z.enum(['photo', 'video']),
   fileUrl: z.string().url().optional(),
+  notes: z.string().max(2000).optional(),
   // Flat fields, not a nested `geotag` object, because this comes in as
   // multipart/form-data alongside the file (FormData can't nest objects) —
   // a device-sourced fallback for when the uploaded file's own EXIF has no

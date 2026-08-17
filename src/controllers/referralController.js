@@ -18,6 +18,11 @@ const claim = catchAsync(async (req, res) => {
   const referral = await Referral.findById(req.params.id);
   if (!referral) throw ApiError.notFound('Referral not found');
   if (referral.status !== 'invited') throw ApiError.conflict('Referral already claimed');
+  // Otherwise the referrer could visit their own invite link and later
+  // collect maybeRewardReferral's payout for "referring" themselves.
+  if (String(referral.referrerId) === String(req.user._id)) {
+    throw ApiError.badRequest('Cannot claim your own referral');
+  }
 
   referral.referredId = req.user._id;
   referral.status = 'joined';

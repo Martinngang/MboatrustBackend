@@ -8,14 +8,15 @@ const storageService = require('./storageService');
  * text; uploading it as a real, fetchable file is what actually matters for
  * generatedDocumentUrl to stop being permanently null.
  */
-async function generateAndUploadContract({ project, bid }) {
+async function generateAndUploadContract({ project, bid, contractorName, ownerName }) {
   const milestoneLines = project.milestones
     .map((m, i) => `  ${i + 1}. ${m.name} — ${m.amount} ${project.currency} (released on approved evidence)`)
     .join('\n');
   const text =
     `MBOA TRUST — DIGITAL CONTRACT\n\n` +
     `Project: ${project.title}\n` +
-    `Contractor: ${bid.contractorId}\n` +
+    `Project owner: ${ownerName || project.ownerId}\n` +
+    `Contractor: ${contractorName || bid.contractorId}\n` +
     `Total value: ${bid.price} ${project.currency}\n` +
     `Proposed timeline: ${bid.timelineDays} days\n\n` +
     `Payment milestones (held in escrow, released individually on verified proof):\n${milestoneLines}\n\n` +

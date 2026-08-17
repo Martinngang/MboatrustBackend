@@ -108,6 +108,13 @@ async function createPurchaseProject(listing, buyerId, amount) {
     throw ApiError.conflict('Only a verified listing can be purchased');
   }
   if (listing.linkedProjectId) throw ApiError.conflict('This listing already has an active purchase in progress');
+  // Shared by the direct-purchase path and the offer/accept negotiation —
+  // without this a seller could "sell" their own listing to themselves,
+  // fabricating a completed sale on a platform whose entire premise is
+  // verifying land deals are real.
+  if (String(listing.sellerId) === String(buyerId)) {
+    throw ApiError.badRequest('Cannot purchase your own listing');
+  }
 
   const project = await Project.create({
     projectType: 'land_purchase',
