@@ -5,7 +5,7 @@ const RiskFlagSchema = new Schema(
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     flagType: {
       type: String,
-      enum: ['multiple_disputes', 'duplicate_geotag', 'reused_evidence', 'ai_flagged', 'land_listing_risk'],
+      enum: ['multiple_disputes', 'duplicate_geotag', 'reused_evidence', 'ai_flagged', 'land_listing_risk', 'escrow_anomaly'],
       required: true,
     },
     severity: { type: String, enum: ['low', 'medium', 'high'], default: 'low' },

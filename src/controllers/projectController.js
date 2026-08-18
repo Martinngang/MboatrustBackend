@@ -10,6 +10,7 @@ const storageService = require('../services/storageService');
 const notificationService = require('../services/notificationService');
 const evidenceAnalysisService = require('../services/evidenceAnalysisService');
 const referralService = require('../services/referralService');
+const escrowAnomalyService = require('../services/escrowAnomalyService');
 
 const getAll = catchAsync(async (req, res) => {
   const { page = 1, limit = 20, projectType, status, ownerId } = req.query;
@@ -500,6 +501,16 @@ const decideApproval = catchAsync(async (req, res) => {
     milestoneId,
     status: milestone.status,
   });
+
+  // Detection-only — runs after the release is already persisted, never
+  // able to delay or block the payout itself, and never touches the
+  // double-spend guard above. See escrowAnomalyService.
+  if (releasedEscrow) {
+    await escrowAnomalyService.checkAndFlag({
+      escrow: releasedEscrow,
+      beneficiaryId: releasedEscrow.contractorId || project.ownerId,
+    });
+  }
 
   if (justCompleted) {
     // A prompt, not an auto-generated rating — never fabricate one on

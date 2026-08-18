@@ -4,6 +4,7 @@ const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const feeService = require('../services/feeService');
 const paymentService = require('../services/paymentService');
+const escrowAnomalyService = require('../services/escrowAnomalyService');
 
 // Transactions are their own collection (not embedded in Project) so admin
 // revenue reports and per-user transaction history can query independently.
@@ -93,6 +94,15 @@ const refund = catchAsync(async (req, res) => {
   if (project && paymentResult.status === 'completed') {
     original.status = 'reversed';
     await original.save();
+  }
+
+  // Detection-only — runs after the refund is already persisted, never
+  // able to delay or block it. See escrowAnomalyService. Refunds have no
+  // tracked funder identity (no Contribution model to resolve one from),
+  // so the project owner stands in as the responsible party of record —
+  // ownerId is required on every Project, so this is never null.
+  if (project) {
+    await escrowAnomalyService.checkAndFlag({ escrow: refundEscrow, beneficiaryId: project.ownerId });
   }
 
   return created(res, refundEscrow);
