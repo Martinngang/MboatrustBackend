@@ -3,6 +3,7 @@ const exifr = require('exifr');
 const { Project } = require('../models');
 const { haversineDistanceMeters } = require('../utils/geo');
 const { isAiConfigured, analyzeWithGemini, parseJsonResponse } = require('./aiClient');
+const { logEvent } = require('./systemEventService');
 const env = require('../config/env');
 
 const LOCATION_MATCH_RADIUS_M = 2000; // generous — GPS drift + informal addressing in rural areas
@@ -101,7 +102,15 @@ async function getAiSecondOpinion({ analysis, project, milestone, fileUrl, evide
     prompt,
     imageUrl: evidenceType === 'photo' ? fileUrl : undefined,
   });
-  if (!result.ok) return null;
+  if (!result.ok) {
+    // Never blocks evidence submission — the deterministic heuristic flag
+    // this was only ever meant to augment already landed.
+    logEvent({
+      type: 'ai_call_failed', source: 'evidenceAnalysisService.getAiSecondOpinion',
+      detail: { projectId: project._id, milestoneId: milestone._id, error: result.error },
+    }).catch(() => {});
+    return null;
+  }
 
   const parsed = parseJsonResponse(result.text);
   if (!parsed || typeof parsed.riskScore !== 'number') return null;

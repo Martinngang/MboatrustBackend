@@ -28,4 +28,5 @@ module.exports = {
   TeamMember: require('./TeamMember'),
   ProjectTemplate: require('./ProjectTemplate'),
   VerifierProfile: require('./VerifierProfile'),
+  SystemEvent: require('./SystemEvent'),
 };

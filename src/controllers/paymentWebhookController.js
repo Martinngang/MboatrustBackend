@@ -3,6 +3,7 @@ const Stripe = require('stripe');
 const env = require('../config/env');
 const { Escrow, Project } = require('../models');
 const catchAsync = require('../utils/catchAsync');
+const { logEvent } = require('../services/systemEventService');
 
 const stripe = env.stripe.secretKey ? new Stripe(env.stripe.secretKey) : null;
 
@@ -13,10 +14,16 @@ const notify = catchAsync(async (req, res) => {
   const payload = { ...req.query, ...req.body };
   const reference = payload.pay_token || payload.notif_token || payload.token;
   const statusRaw = String(payload.status || '').toUpperCase();
-  if (!reference) return res.status(400).json({ success: false, error: 'missing payment token' });
+  if (!reference) {
+    logEvent({ type: 'webhook_error', source: 'paymentWebhookController.notify', detail: { reason: 'missing payment token', payload } }).catch(() => {});
+    return res.status(400).json({ success: false, error: 'missing payment token' });
+  }
 
   const escrow = await Escrow.findOne({ paymentProvider: 'orange_money', providerReference: reference });
-  if (!escrow) return res.status(404).json({ success: false, error: 'unknown transaction' });
+  if (!escrow) {
+    logEvent({ type: 'webhook_error', source: 'paymentWebhookController.notify', detail: { reason: 'unknown transaction', reference } }).catch(() => {});
+    return res.status(404).json({ success: false, error: 'unknown transaction' });
+  }
 
   if (escrow.status === 'pending') {
     escrow.status = ['SUCCESS', 'SUCCESSFUL'].includes(statusRaw) ? 'completed' : statusRaw === 'FAILED' ? 'failed' : 'pending';
@@ -45,6 +52,7 @@ const stripeWebhook = catchAsync(async (req, res) => {
     const raw = req.rawBody ? req.rawBody.toString('utf8') : (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
     event = stripe.webhooks.constructEvent(raw, sig, env.stripe.webhookSecret);
   } catch (err) {
+    logEvent({ type: 'webhook_error', source: 'paymentWebhookController.stripeWebhook', detail: { reason: 'signature verification failed', error: err.message } }).catch(() => {});
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
@@ -83,7 +91,10 @@ const flutterwaveWebhook = catchAsync(async (req, res) => {
 
   if (env.flutterwave.secretKey && signature) {
     const expected = crypto.createHmac('sha256', env.flutterwave.secretKey).update(raw).digest('hex');
-    if (signature !== expected) return res.status(400).json({ success: false, error: 'Invalid signature' });
+    if (signature !== expected) {
+      logEvent({ type: 'webhook_error', source: 'paymentWebhookController.flutterwaveWebhook', detail: { reason: 'invalid signature' } }).catch(() => {});
+      return res.status(400).json({ success: false, error: 'Invalid signature' });
+    }
   }
 
   const payload = JSON.parse(raw.toString('utf8'));
@@ -91,10 +102,16 @@ const flutterwaveWebhook = catchAsync(async (req, res) => {
   // Flutterwave webhook payloads vary — try to extract tx_ref / id and status
   const txRef = payload.data?.tx_ref || payload.data?.id || payload.tx_ref || payload.id;
   const statusRaw = payload.data?.status || payload.status || '';
-  if (!txRef) return res.status(400).json({ success: false, error: 'missing reference' });
+  if (!txRef) {
+    logEvent({ type: 'webhook_error', source: 'paymentWebhookController.flutterwaveWebhook', detail: { reason: 'missing reference', payload } }).catch(() => {});
+    return res.status(400).json({ success: false, error: 'missing reference' });
+  }
 
   const escrow = await Escrow.findOne({ paymentProvider: 'flutterwave', providerReference: txRef });
-  if (!escrow) return res.status(404).json({ success: false, error: 'unknown transaction' });
+  if (!escrow) {
+    logEvent({ type: 'webhook_error', source: 'paymentWebhookController.flutterwaveWebhook', detail: { reason: 'unknown transaction', txRef } }).catch(() => {});
+    return res.status(404).json({ success: false, error: 'unknown transaction' });
+  }
 
   if (escrow.status === 'pending') {
     escrow.status = String(statusRaw).toLowerCase() === 'successful' ? 'completed' : String(statusRaw).toLowerCase() === 'failed' ? 'failed' : escrow.status;

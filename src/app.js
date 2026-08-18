@@ -8,6 +8,8 @@ const rateLimit = require('express-rate-limit');
 const env = require('./config/env');
 const routes = require('./routes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
+const { getHealth } = require('./controllers/healthController');
+const { logEvent } = require('./services/systemEventService');
 
 const app = express();
 
@@ -36,12 +38,16 @@ app.use(
     // shape. Without this, a 429 still degrades safely (falls back to a
     // generic axios message) but loses the actual "try again later" text.
     handler: (req, res) => {
+      // Fire-and-forget — must never add latency to an already-throttled
+      // response, and a burst of 429s hitting this must never itself
+      // become a second source of failure.
+      logEvent({ type: 'rate_limited', severity: 'warning', source: 'app.rateLimit', detail: { path: req.path, ip: req.ip } }).catch(() => {});
       res.status(429).json({ success: false, error: { message: 'Too many requests — please try again in a few minutes.' } });
     },
   })
 );
 
-app.get('/health', (req, res) => res.json({ status: 'ok', env: env.nodeEnv }));
+app.get('/health', getHealth);
 
 app.use('/api/v1', routes);
 

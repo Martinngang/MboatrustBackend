@@ -5,6 +5,7 @@ const catchAsync = require('../utils/catchAsync');
 const { scoreContractor, getRecommendedContractors, getVerifiedCertCounts } = require('../services/contractorMatchingService');
 const { getStats } = require('./contractorProfileController');
 const { isAiConfigured, analyzeWithGemini, parseJsonResponse } = require('../services/aiClient');
+const { logEvent } = require('../services/systemEventService');
 const env = require('../config/env');
 
 const AI_RATIONALE_TOP_N = 5;
@@ -47,7 +48,13 @@ async function attachAiRationale(project, recommendations) {
       .join('\n');
 
   const result = await analyzeWithGemini({ system, prompt });
-  if (!result.ok) return recommendations;
+  if (!result.ok) {
+    // Never blocks the response — the heuristic ranking above is already
+    // complete and correct on its own; this only would have added a
+    // rationale sentence on top of it.
+    logEvent({ type: 'ai_call_failed', source: 'matchingController.attachAiRationale', detail: { projectId: project._id, error: result.error } }).catch(() => {});
+    return recommendations;
+  }
 
   const parsed = parseJsonResponse(result.text);
   if (!parsed || !Array.isArray(parsed.rationales)) return recommendations;
