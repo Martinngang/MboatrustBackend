@@ -27,4 +27,5 @@ module.exports = {
   IdempotencyKey: require('./IdempotencyKey'),
   TeamMember: require('./TeamMember'),
   ProjectTemplate: require('./ProjectTemplate'),
+  VerifierProfile: require('./VerifierProfile'),
 };

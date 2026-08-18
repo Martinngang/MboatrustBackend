@@ -33,5 +33,6 @@ router.use('/payments', require('./paymentWebhookRoutes'));
 router.use('/dev', require('./devRoutes'));
 router.use('/team-members', require('./teamMemberRoutes'));
 router.use('/project-templates', require('./projectTemplateRoutes'));
+router.use('/verifier-profiles', require('./verifierProfileRoutes'));
 
 module.exports = router;
