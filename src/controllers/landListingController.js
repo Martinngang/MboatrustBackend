@@ -5,6 +5,7 @@ const catchAsync = require('../utils/catchAsync');
 const storageService = require('../services/storageService');
 const landDuplicateService = require('../services/landDuplicateService');
 const notificationService = require('../services/notificationService');
+const { getRecommendedListings } = require('../services/landMatchingService');
 
 const getAll = catchAsync(async (req, res) => {
   const { page = 1, limit = 20, verificationStatus, sellerId, disputeFlag } = req.query;
@@ -28,6 +29,15 @@ const getOne = catchAsync(async (req, res) => {
   const listing = await LandListing.findById(req.params.id).populate('sellerId', 'fullName');
   if (!listing) throw ApiError.notFound('Land listing not found');
   return ok(res, listing);
+});
+
+/** Funder-facing suggestion list — opt-in, additive to the main browse
+ * feed, never a replacement for it. Ranked off the calling user's own real
+ * offer history (price/sqm and region interest), verification status, and
+ * seller reputation. */
+const getRecommended = catchAsync(async (req, res) => {
+  const recommendations = await getRecommendedListings(req.user._id, { limit: Number(req.query.limit) || 10 });
+  return ok(res, recommendations);
 });
 
 const create = catchAsync(async (req, res) => {
@@ -180,4 +190,4 @@ const purchase = catchAsync(async (req, res) => {
   return created(res, { listing, project });
 });
 
-module.exports = { getAll, getOne, create, update, remove, addDocument, updateVerificationStatus, purchase, createPurchaseProject };
+module.exports = { getAll, getOne, getRecommended, create, update, remove, addDocument, updateVerificationStatus, purchase, createPurchaseProject };

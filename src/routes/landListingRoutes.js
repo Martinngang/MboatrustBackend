@@ -14,6 +14,7 @@ const {
 const router = Router();
 
 router.get('/', landListingController.getAll);
+router.get('/recommended', authenticate, landListingController.getRecommended);
 router.get('/:id', landListingController.getOne);
 router.post(
   '/',

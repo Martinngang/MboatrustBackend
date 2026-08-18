@@ -15,6 +15,7 @@
     "verify:land-risk-ai": "node src/scripts/verifyLandRiskAi.js",
     "verify:verifier-matching": "node src/scripts/verifyVerifierMatching.js",
     "verify:escrow-anomaly": "node src/scripts/verifyEscrowAnomaly.js",
+    "verify:land-matching": "node src/scripts/verifyLandMatching.js",
     "charge:recurring-contributions": "node src/scripts/chargeRecurringContributions.js",
     "charge:subscription-renewals": "node src/scripts/chargeSubscriptionRenewals.js",
     "verify:full-backend": "node src/scripts/verifyFullBackend.js"
