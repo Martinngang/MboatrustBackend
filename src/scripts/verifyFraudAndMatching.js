@@ -6,8 +6,8 @@
 // the end of the run, pass or fail.
 const { connectDB } = require('../config/db');
 const mongoose = require('mongoose');
-const { User, ContractorProfile, Project, RiskFlag } = require('../models');
-const { getRecommendedContractors } = require('../services/contractorMatchingService');
+const { User, ContractorProfile, ContractorCertification, Project, RiskFlag } = require('../models');
+const { getRecommendedContractors, scoreContractor, getVerifiedCertCounts } = require('../services/contractorMatchingService');
 const evidenceAnalysisService = require('../services/evidenceAnalysisService');
 const storageService = require('../services/storageService');
 const matchingController = require('../controllers/matchingController');
@@ -58,6 +58,7 @@ async function run() {
   await connectDB();
   const createdUserIds = [];
   const createdProjectIds = [];
+  const createdCertIds = [];
 
   try {
     let funder = await User.findOne({ email: `${TAG}-funder@test.local` });
@@ -100,6 +101,80 @@ async function run() {
       'Heuristic scoring ran and ranked sensibly',
       recommendations.length > 0 && alphaRank !== -1 && gammaRank !== -1 && alphaRank < gammaRank,
       `Alpha (matching category) ranked #${alphaRank + 1}, Gamma (mismatched) ranked #${gammaRank + 1}`
+    );
+
+    // ── 1b. Experience + certification scoring ───────────────────────────
+    // Two otherwise-identical contractors (same category, no location data
+    // so location/reliability/rating all land the same for both) — the only
+    // difference is years of experience and admin-verified certifications.
+    // The seasoned/certified one must score strictly higher, and by no more
+    // than the 20 points those two dimensions are worth combined.
+    const seasoned = await User.create({
+      fullName: `${TAG} Seasoned`,
+      email: `${TAG}-seasoned-${Date.now()}@test.local`,
+      firebaseUid: `${TAG}-seasoned-${Date.now()}`,
+      roles: [{ roleType: 'contractor' }],
+    });
+    const rookie = await User.create({
+      fullName: `${TAG} Rookie`,
+      email: `${TAG}-rookie-${Date.now()}@test.local`,
+      firebaseUid: `${TAG}-rookie-${Date.now()}`,
+      roles: [{ roleType: 'contractor' }],
+    });
+    createdUserIds.push(seasoned._id, rookie._id);
+
+    const seasonedProfile = await ContractorProfile.create({
+      userId: seasoned._id,
+      categories: ['Water & Sanitation'],
+      yearsExperience: 10,
+      isAvailable: true,
+    });
+    const rookieProfile = await ContractorProfile.create({
+      userId: rookie._id,
+      categories: ['Water & Sanitation'],
+      yearsExperience: 0,
+      isAvailable: true,
+    });
+
+    const cert1 = await ContractorCertification.create({
+      userId: seasoned._id,
+      title: 'Certified Plumbing Installer',
+      issuer: 'Cameroon Board of Trades',
+      verified: true,
+    });
+    const cert2 = await ContractorCertification.create({
+      userId: seasoned._id,
+      title: 'Water Systems Safety',
+      issuer: 'Cameroon Board of Trades',
+      verified: true,
+    });
+    // An unverified cert on the rookie must NOT count — only admin-verified
+    // certifications earn matching credit.
+    const cert3 = await ContractorCertification.create({
+      userId: rookie._id,
+      title: 'Self-reported cert',
+      issuer: 'N/A',
+      verified: false,
+    });
+    createdCertIds.push(cert1._id, cert2._id, cert3._id);
+
+    const zeroStats = { completionRate: 0, ratingCount: 0, avgRating: null };
+    const certCounts = await getVerifiedCertCounts([seasoned._id, rookie._id]);
+    const seasonedScore = scoreContractor(tender, seasonedProfile, zeroStats, certCounts.get(String(seasoned._id)) || 0);
+    const rookieScore = scoreContractor(tender, rookieProfile, zeroStats, certCounts.get(String(rookie._id)) || 0);
+    record(
+      'Verified certifications are counted, unverified ones are not',
+      certCounts.get(String(seasoned._id)) === 2 && (certCounts.get(String(rookie._id)) || 0) === 0
+    );
+    record(
+      'Experience + certifications lift a seasoned contractor\'s score',
+      seasonedScore.total > rookieScore.total &&
+        seasonedScore.total - rookieScore.total <= 20 &&
+        seasonedScore.breakdown.experience === 10 &&
+        seasonedScore.breakdown.certifications === 10 &&
+        rookieScore.breakdown.experience === 0 &&
+        rookieScore.breakdown.certifications === 0,
+      `seasoned=${seasonedScore.total} (${JSON.stringify(seasonedScore.breakdown)}) rookie=${rookieScore.total} (${JSON.stringify(rookieScore.breakdown)})`
     );
 
     // ── 2. AI configuration ──────────────────────────────────────────────
@@ -184,6 +259,7 @@ async function run() {
   } finally {
     await User.deleteMany({ _id: { $in: createdUserIds } });
     await ContractorProfile.deleteMany({ userId: { $in: createdUserIds } });
+    await ContractorCertification.deleteMany({ _id: { $in: createdCertIds } });
     await Project.deleteMany({ _id: { $in: createdProjectIds } });
     await RiskFlag.deleteMany({ userId: { $in: createdUserIds } });
     console.log('\n[cleanup] all verification fixtures removed.');

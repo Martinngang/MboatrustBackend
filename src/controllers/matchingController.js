@@ -2,7 +2,7 @@ const { Project, Bid, ContractorProfile } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
-const { scoreContractor, getRecommendedContractors } = require('../services/contractorMatchingService');
+const { scoreContractor, getRecommendedContractors, getVerifiedCertCounts } = require('../services/contractorMatchingService');
 const { getStats } = require('./contractorProfileController');
 const { isAiConfigured, analyzeWithGemini, parseJsonResponse } = require('../services/aiClient');
 const env = require('../config/env');
@@ -39,7 +39,8 @@ async function attachAiRationale(project, recommendations) {
       .map(
         (r, i) =>
           `${i + 1}. contractorId=${r.contractorId} name=${r.fullName} score=${r.score.total}/100 ` +
-          `(category match ${r.score.breakdown.category}/35, location ${r.score.breakdown.location}/20) ` +
+          `(category match ${r.score.breakdown.category}/30, location ${r.score.breakdown.location}/15, ` +
+          `experience ${r.score.breakdown.experience}/10, certifications ${r.score.breakdown.certifications}/10) ` +
           `completedProjects=${r.stats.completedProjects} avgRating=${r.stats.avgRating ?? 'none'} ` +
           `completionRate=${Math.round((r.stats.completionRate || 0) * 100)}%`
       )
@@ -101,11 +102,13 @@ const getBidsWithScores = catchAsync(async (req, res) => {
   const profileByUserId = new Map(profiles.map((p) => [String(p.userId), p]));
   const statsList = await Promise.all(contractorIds.map((id) => getStats(id)));
   const statsByUserId = new Map(contractorIds.map((id, i) => [String(id), statsList[i]]));
+  const certCountByUserId = await getVerifiedCertCounts(contractorIds);
 
   const withScores = bids.map((bid) => {
     const profile = profileByUserId.get(String(bid.contractorId._id)) || null;
     const stats = statsByUserId.get(String(bid.contractorId._id));
-    return { ...bid, score: scoreContractor(project, profile, stats), stats };
+    const certCount = certCountByUserId.get(String(bid.contractorId._id)) || 0;
+    return { ...bid, score: scoreContractor(project, profile, stats, certCount), stats };
   });
 
   withScores.sort((a, b) => b.score.total - a.score.total);
