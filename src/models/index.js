@@ -25,4 +25,6 @@ module.exports = {
   FeeConfig: require('./FeeConfig'),
   Subscription: require('./Subscription'),
   IdempotencyKey: require('./IdempotencyKey'),
+  TeamMember: require('./TeamMember'),
+  ProjectTemplate: require('./ProjectTemplate'),
 };

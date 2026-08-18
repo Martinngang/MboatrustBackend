@@ -31,5 +31,7 @@ router.use('/subscriptions', require('./subscriptionRoutes'));
 router.use('/kyc', require('./kycRoutes'));
 router.use('/payments', require('./paymentWebhookRoutes'));
 router.use('/dev', require('./devRoutes'));
+router.use('/team-members', require('./teamMemberRoutes'));
+router.use('/project-templates', require('./projectTemplateRoutes'));
 
 module.exports = router;
