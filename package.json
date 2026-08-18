@@ -12,6 +12,7 @@
     "verify:role-security": "node src/scripts/verifyRoleSecurity.js",
     "verify:team-templates": "node src/scripts/verifyTeamAndTemplates.js",
     "verify:verifier-pipeline": "node src/scripts/verifyVerifierPipeline.js",
+    "verify:land-risk-ai": "node src/scripts/verifyLandRiskAi.js",
     "charge:recurring-contributions": "node src/scripts/chargeRecurringContributions.js",
     "charge:subscription-renewals": "node src/scripts/chargeSubscriptionRenewals.js",
     "verify:full-backend": "node src/scripts/verifyFullBackend.js"

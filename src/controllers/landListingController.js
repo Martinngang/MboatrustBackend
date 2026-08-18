@@ -1,4 +1,4 @@
-const { LandListing, Project } = require('../models');
+const { LandListing, Project, RiskFlag } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
@@ -33,12 +33,41 @@ const getOne = catchAsync(async (req, res) => {
 const create = catchAsync(async (req, res) => {
   const listing = await LandListing.create({ ...req.body, sellerId: req.user._id });
   const duplicateId = await landDuplicateService.findDuplicate(listing);
-  if (duplicateId) {
-    listing.duplicateOfListingId = duplicateId;
-    listing.disputeFlag = true;
-    listing.disputeReason = 'Automatically flagged — matches the location and size of an existing listing';
+  const priceOutlier = await landDuplicateService.findPriceOutlier(listing);
+
+  if (duplicateId || priceOutlier) {
+    if (duplicateId) {
+      listing.duplicateOfListingId = duplicateId;
+      listing.disputeFlag = true;
+      listing.disputeReason = 'Automatically flagged — matches the location and size of an existing listing';
+    } else {
+      listing.disputeFlag = true;
+      listing.disputeReason = `Automatically flagged — price/sqm is ${priceOutlier.ratio.toFixed(1)}x the ${listing.region} regional median`;
+    }
     await listing.save();
+
+    const riskFlag = await RiskFlag.create({
+      userId: req.user._id,
+      flagType: 'land_listing_risk',
+      severity: 'medium',
+      detail: {
+        listingId: listing._id,
+        duplicateOfListingId: duplicateId,
+        priceOutlier: priceOutlier
+          ? { ratio: priceOutlier.ratio, regionalMedian: priceOutlier.regionalMedian, comparableCount: priceOutlier.comparableCount }
+          : null,
+      },
+    });
+
+    const aiOpinion = await landDuplicateService.getAiSecondOpinion({ listing, duplicateId, priceOutlier });
+    if (aiOpinion) {
+      riskFlag.aiRiskScore = aiOpinion.riskScore;
+      riskFlag.aiRationale = aiOpinion.rationale;
+      if (aiOpinion.suspicious && riskFlag.severity !== 'high') riskFlag.severity = 'high';
+      await riskFlag.save();
+    }
   }
+
   await listing.populate('sellerId', 'fullName');
   return created(res, listing);
 });
