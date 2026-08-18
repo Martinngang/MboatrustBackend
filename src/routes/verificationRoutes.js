@@ -10,6 +10,12 @@ const {
 const router = Router();
 
 router.get('/', authenticate, verificationController.getAll);
+router.get(
+  '/recommended-verifiers',
+  authenticate,
+  requireRole('admin'),
+  verificationController.getRecommendedVerifiersForTarget
+);
 router.get('/:id', authenticate, verificationController.getOne);
 router.post(
   '/',

@@ -13,6 +13,7 @@
     "verify:team-templates": "node src/scripts/verifyTeamAndTemplates.js",
     "verify:verifier-pipeline": "node src/scripts/verifyVerifierPipeline.js",
     "verify:land-risk-ai": "node src/scripts/verifyLandRiskAi.js",
+    "verify:verifier-matching": "node src/scripts/verifyVerifierMatching.js",
     "charge:recurring-contributions": "node src/scripts/chargeRecurringContributions.js",
     "charge:subscription-renewals": "node src/scripts/chargeSubscriptionRenewals.js",
     "verify:full-backend": "node src/scripts/verifyFullBackend.js"

@@ -3,6 +3,7 @@ const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const notificationService = require('../services/notificationService');
+const { getRecommendedVerifiers } = require('../services/verifierMatchingService');
 
 /**
  * `targetId` is a polymorphic reference (a milestone subdocument _id within
@@ -82,4 +83,14 @@ const submitReport = catchAsync(async (req, res) => {
   return ok(res, task);
 });
 
-module.exports = { getAll, getOne, create, startTask, submitReport };
+/** Admin-only suggestion list for the manual-assignment flow: which
+ * approved verifiers best fit this milestone/land-listing target, ranked by
+ * proximity, specialty match, and open caseload. */
+const getRecommendedVerifiersForTarget = catchAsync(async (req, res) => {
+  const { targetType, targetId, limit } = req.query;
+  if (!targetType || !targetId) throw ApiError.badRequest('targetType and targetId are required');
+  const recommendations = await getRecommendedVerifiers(targetType, targetId, { limit: Number(limit) || 10 });
+  return ok(res, recommendations);
+});
+
+module.exports = { getAll, getOne, create, startTask, submitReport, getRecommendedVerifiersForTarget };
