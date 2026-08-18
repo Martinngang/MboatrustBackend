@@ -9,6 +9,7 @@
     "dev": "nodemon src/server.js",
     "seed:fees": "node src/scripts/seedFeeConfig.js",
     "verify:ai-features": "node src/scripts/verifyFraudAndMatching.js",
+    "verify:role-security": "node src/scripts/verifyRoleSecurity.js",
     "charge:recurring-contributions": "node src/scripts/chargeRecurringContributions.js",
     "charge:subscription-renewals": "node src/scripts/chargeSubscriptionRenewals.js",
     "verify:full-backend": "node src/scripts/verifyFullBackend.js"

@@ -113,6 +113,21 @@ const revokeRole = catchAsync(async (req, res) => {
   return ok(res, user);
 });
 
+/** Admin-only counterpart to revokeRole/addRole — the only path onto
+ * 'verifier'/'admin' now that those are excluded from the self-service
+ * addRole enum (see userValidators.js). Mirrors addRole's own
+ * already-has-it guard, just targeting a specific user instead of req.user. */
+const grantRole = catchAsync(async (req, res) => {
+  const { roleType } = req.body;
+  const user = await User.findById(req.params.id);
+  if (!user) throw ApiError.notFound('User not found');
+  if (!user.roles.some((r) => r.roleType === roleType)) {
+    user.roles.push({ roleType });
+    await user.save();
+  }
+  return ok(res, user);
+});
+
 /** Synchronous self-service export of everything this account owns, scoped
  * strictly to req.user._id across every collection with a direct user link —
  * a real "download my data" rather than a fire-and-forget request that
@@ -220,4 +235,5 @@ module.exports = {
   deactivate,
   reactivate,
   revokeRole,
+  grantRole,
 };
