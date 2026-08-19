@@ -17,6 +17,7 @@
     "verify:escrow-anomaly": "node src/scripts/verifyEscrowAnomaly.js",
     "verify:land-matching": "node src/scripts/verifyLandMatching.js",
     "verify:observability": "node src/scripts/verifyObservability.js",
+    "verify:delete-account": "node src/scripts/verifyDeleteAccount.js",
     "charge:recurring-contributions": "node src/scripts/chargeRecurringContributions.js",
     "charge:subscription-renewals": "node src/scripts/chargeSubscriptionRenewals.js",
     "verify:full-backend": "node src/scripts/verifyFullBackend.js"

@@ -99,6 +99,23 @@ const deactivate = catchAsync(async (req, res) => {
   return ok(res, user);
 });
 
+/** Self-service counterpart to the admin-only deactivate — same soft
+ * status flip (see deactivate's comment for why this is a deactivate, not
+ * a hard delete), just targeting req.user instead of req.params.id, and
+ * also revoking every Firebase session so the account is actually signed
+ * out everywhere immediately rather than staying logged in on this device
+ * until its token happens to expire. */
+const deactivateMe = catchAsync(async (req, res) => {
+  const user = await User.findByIdAndUpdate(req.user._id, { isActive: false }, { new: true });
+
+  const admin = initFirebase();
+  if (user.firebaseUid && admin) {
+    await admin.auth().revokeRefreshTokens(user.firebaseUid).catch(() => {});
+  }
+
+  return ok(res, user);
+});
+
 const reactivate = catchAsync(async (req, res) => {
   const user = await User.findByIdAndUpdate(req.params.id, { isActive: true }, { new: true });
   if (!user) throw ApiError.notFound('User not found');
@@ -228,6 +245,7 @@ module.exports = {
   setDeviceToken,
   exportMyData,
   revokeSessions,
+  deactivateMe,
   search,
   getPublicProfile,
   adminGetAll,

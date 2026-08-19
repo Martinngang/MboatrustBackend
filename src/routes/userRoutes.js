@@ -17,6 +17,7 @@ router.post('/me/documents', authenticate, upload.single('file'), userController
 router.post('/me/device-token', authenticate, validate(z.object({ token: z.string().min(1) })), userController.setDeviceToken);
 router.get('/me/export', authenticate, userController.exportMyData);
 router.post('/me/sessions/revoke', authenticate, userController.revokeSessions);
+router.patch('/me/deactivate', authenticate, userController.deactivateMe);
 
 router.get('/search', authenticate, userController.search);
 router.get('/:id', userController.getPublicProfile);
