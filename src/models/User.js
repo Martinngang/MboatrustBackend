@@ -53,6 +53,14 @@ const UserSchema = new Schema(
     // just because e.g. they abandoned profile setup with roles already
     // saved. See api/session.ts's resolveAuthDestination on the client.
     onboardingCompleted: { type: Boolean, default: false },
+    // Diaspora funder's country/city of residence, set during onboarding
+    // (ProfileSetupScreen). residenceCountry is a real ISO 3166-1 alpha-2
+    // code (see utils/locationData.ts on the frontend, backed by the
+    // country-state-city dataset) rather than a free-text guess — city is
+    // that country's real locality name, not validated against a fixed
+    // enum here since the dataset is too large to mirror server-side.
+    residenceCountry: { type: String, default: '' },
+    residenceCity: { type: String, default: '' },
     avatarUrl: { type: String, default: null },
     isActive: { type: Boolean, default: true },
     // Firebase Cloud Messaging token for the device currently signed in —

@@ -7,6 +7,10 @@ const updateProfile = z.object({
   // Set to true exactly once, by ProfileSetupScreen's final "Complete setup"
   // call — the flag that lets a returning user skip role selection entirely.
   onboardingCompleted: z.boolean().optional(),
+  // ISO 3166-1 alpha-2 (e.g. "FR") — the frontend's SearchableSelect always
+  // sends a real country-state-city isoCode, never free text.
+  residenceCountry: z.string().regex(/^[A-Z]{2}$/).optional(),
+  residenceCity: z.string().min(1).optional(),
 });
 
 // Self-service roles only — a user can freely switch into any of these
