@@ -36,5 +36,6 @@ router.use('/project-templates', require('./projectTemplateRoutes'));
 router.use('/verifier-profiles', require('./verifierProfileRoutes'));
 router.use('/admin/system-health', require('./systemHealthRoutes'));
 router.use('/system-events', require('./systemEventRoutes'));
+router.use('/activity', require('./activityRoutes'));
 
 module.exports = router;

@@ -20,6 +20,7 @@
     "verify:delete-account": "node src/scripts/verifyDeleteAccount.js",
     "verify:hard-delete-account": "node src/scripts/verifyHardDeleteAccount.js",
     "verify:residence-location": "node src/scripts/verifyResidenceLocation.js",
+    "verify:activity-feed": "node src/scripts/verifyActivityFeed.js",
     "charge:recurring-contributions": "node src/scripts/chargeRecurringContributions.js",
     "charge:subscription-renewals": "node src/scripts/chargeSubscriptionRenewals.js",
     "verify:full-backend": "node src/scripts/verifyFullBackend.js"
