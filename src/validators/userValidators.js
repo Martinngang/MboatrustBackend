@@ -30,4 +30,13 @@ const linkAuthProvider = z.object({
   providerId: z.string().min(1),
 });
 
-module.exports = { updateProfile, addRole, adminGrantRole, linkAuthProvider };
+// A literal typed confirmation, not just a boolean flag — the same
+// belt-and-suspenders safety this endpoint's frontend already requires
+// (a checkbox is not enough on its own for something genuinely
+// irreversible), enforced at the API layer too so the endpoint can't be
+// triggered by an accidental/malformed request.
+const deleteMyAccount = z.object({
+  confirm: z.literal('DELETE'),
+});
+
+module.exports = { updateProfile, addRole, adminGrantRole, linkAuthProvider, deleteMyAccount };

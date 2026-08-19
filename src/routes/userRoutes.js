@@ -4,7 +4,7 @@ const userController = require('../controllers/userController');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const upload = require('../middleware/upload');
-const { updateProfile, addRole, linkAuthProvider } = require('../validators/userValidators');
+const { updateProfile, addRole, linkAuthProvider, deleteMyAccount } = require('../validators/userValidators');
 
 const router = Router();
 
@@ -18,6 +18,7 @@ router.post('/me/device-token', authenticate, validate(z.object({ token: z.strin
 router.get('/me/export', authenticate, userController.exportMyData);
 router.post('/me/sessions/revoke', authenticate, userController.revokeSessions);
 router.patch('/me/deactivate', authenticate, userController.deactivateMe);
+router.delete('/me', authenticate, validate(deleteMyAccount), userController.deleteMe);
 
 router.get('/search', authenticate, userController.search);
 router.get('/:id', userController.getPublicProfile);

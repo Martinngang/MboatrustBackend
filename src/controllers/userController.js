@@ -5,6 +5,7 @@ const catchAsync = require('../utils/catchAsync');
 const { buildCrud } = require('./controllerFactory');
 const storageService = require('../services/storageService');
 const { initFirebase } = require('../config/firebase');
+const { hardDeleteUser } = require('../services/userDeletionService');
 
 const crud = buildCrud(User, { searchableFilters: ['kycStatus'] });
 
@@ -114,6 +115,16 @@ const deactivateMe = catchAsync(async (req, res) => {
   }
 
   return ok(res, user);
+});
+
+/** Real hard delete — irreversible, unlike deactivateMe. See
+ * userDeletionService.hardDeleteUser for exactly what gets deleted vs.
+ * detached. Requires the literal body {confirm:'DELETE'} (see
+ * validators/userValidators.js), a second confirmation gate on top of
+ * whatever the frontend already required before calling this. */
+const deleteMe = catchAsync(async (req, res) => {
+  const result = await hardDeleteUser(req.user._id);
+  return ok(res, result);
 });
 
 const reactivate = catchAsync(async (req, res) => {
@@ -246,6 +257,7 @@ module.exports = {
   exportMyData,
   revokeSessions,
   deactivateMe,
+  deleteMe,
   search,
   getPublicProfile,
   adminGetAll,
