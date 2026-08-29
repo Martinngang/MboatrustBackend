@@ -3,6 +3,14 @@ const crypto = require('crypto');
 const env = require('../../config/env');
 const { normalizeMsisdn, mockProviderReference } = require('./utils');
 
+// MTN's Collections/Disbursements API supports an optional X-Callback-Url
+// header on requesttopay/transfer for async notification, but registering
+// and validating a real callback needs a confirmed production API
+// subscription this integration doesn't have credentials to test against —
+// building one blind (unverifiable here, same reasoning as Orange Money's
+// disbursement API in Phase 4) risks a silently-broken webhook nobody would
+// notice until production. Polling via pollMomoStatus()/refreshStatus stays
+// the sole, deliberate status-resolution mechanism for this provider.
 const MOMO_SANDBOX_CURRENCY = 'EUR';
 const MOMO_STATUS_MAP = { SUCCESSFUL: 'completed', FAILED: 'failed', PENDING: 'pending' };
 
@@ -14,7 +22,7 @@ function momoClient(product) {
     baseURL: env.momo.baseUrl,
     headers: {
       'Ocp-Apim-Subscription-Key': subscriptionKey,
-      'X-Target-Environment': 'sandbox',
+      'X-Target-Environment': env.momo.targetEnvironment,
       'Content-Type': 'application/json',
     },
     timeout: 15000,

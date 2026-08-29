@@ -8,6 +8,7 @@ const notificationService = require('../services/notificationService');
  * milestone — the same two-party model VerificationTask already uses,
  * reused here rather than inventing a separate authorization rule. */
 async function assertCanManage(project, milestoneId, user) {
+  if (user.roles?.some((r) => r.roleType === 'admin')) return;
   if (String(project.ownerId) === String(user._id)) return;
   const assigned = await VerificationTask.findOne({
     targetType: 'milestone',

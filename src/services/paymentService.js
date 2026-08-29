@@ -22,4 +22,16 @@ async function refreshStatus(provider, providerReference, product) {
   return adapter.refreshStatus(providerReference, product);
 }
 
-module.exports = { collect, disburse, refreshStatus };
+/** Reverses a collected payment. Providers with a real, purpose-built
+ * refund API (stripe, flutterwave — refunding a card/transaction charge,
+ * not a generic payout) use it via `supportsRefund`; providers with no
+ * such API (mtn_momo, orange_money — a mobile money "refund" really is
+ * just a disbursement back to the payer) fall back to `disburse`, exactly
+ * matching escrowController.refund's behavior before this function existed. */
+async function refund(provider, params) {
+  const adapter = getPaymentProvider(provider);
+  if (adapter.supportsRefund) return adapter.refund(params);
+  return disburse(provider, params);
+}
+
+module.exports = { collect, disburse, refreshStatus, refund };

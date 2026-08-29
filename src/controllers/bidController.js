@@ -2,19 +2,39 @@
 // GET /projects/:projectId/bids-with-scores (matchingController.js, added
 // by the fraud/matching guide) — not duplicated here as a second
 // /bids/compare route, since that would just be the same feature twice.
-const { Bid, Project, Contract, User } = require('../models');
+const { Bid, Project, Contract, User, Escrow } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const notificationService = require('../services/notificationService');
 const contractDocumentService = require('../services/contractDocumentService');
 
+function isAdmin(user) {
+  return user.roles?.some((r) => r.roleType === 'admin');
+}
+
+/** A bid is private between the contractor who placed it and the funder who
+ * owns the tender it's on — the raw Bid collection has no ownership check
+ * of its own the way GET /projects/:id/bids-with-scores does, so without
+ * this any authenticated caller could pull any contractor's price/timeline/
+ * notes on any tender by projectId, or another contractor's bids by
+ * contractorId. $and'd with whatever filter the client actually asked for,
+ * so every existing legitimate query shape (mine as contractor, or on a
+ * tender I own) keeps working unchanged. */
+async function scopeToParty(req, clientFilter) {
+  if (isAdmin(req.user)) return clientFilter;
+  const myProjects = await Project.find({ ownerId: req.user._id }).select('_id').lean();
+  const partyOr = { $or: [{ contractorId: req.user._id }, { projectId: { $in: myProjects.map((p) => p._id) } }] };
+  return Object.keys(clientFilter).length > 0 ? { $and: [clientFilter, partyOr] } : partyOr;
+}
+
 const getAll = catchAsync(async (req, res) => {
   const { page = 1, limit = 20, projectId, contractorId, status } = req.query;
-  const filter = {};
-  if (projectId) filter.projectId = projectId;
-  if (contractorId) filter.contractorId = contractorId;
-  if (status) filter.status = status;
+  const clientFilter = {};
+  if (projectId) clientFilter.projectId = projectId;
+  if (contractorId) clientFilter.contractorId = contractorId;
+  if (status) clientFilter.status = status;
+  const filter = await scopeToParty(req, clientFilter);
 
   const [items, total] = await Promise.all([
     Bid.find(filter)
@@ -30,6 +50,12 @@ const getAll = catchAsync(async (req, res) => {
 const getOne = catchAsync(async (req, res) => {
   const bid = await Bid.findById(req.params.id);
   if (!bid) throw ApiError.notFound('Bid not found');
+  if (!isAdmin(req.user)) {
+    const project = await Project.findById(bid.projectId).select('ownerId').lean();
+    const isOwner = project && String(project.ownerId) === String(req.user._id);
+    const isBidder = String(bid.contractorId) === String(req.user._id);
+    if (!isOwner && !isBidder) throw ApiError.forbidden('Not your bid to view');
+  }
   return ok(res, bid);
 });
 
@@ -37,13 +63,72 @@ const create = catchAsync(async (req, res) => {
   const project = await Project.findById(req.body.projectId);
   if (!project || project.projectType !== 'tender') throw ApiError.notFound('Tender not found');
   if (project.status !== 'open') throw ApiError.conflict('This tender is no longer open for bids');
+  if (String(project.ownerId) === String(req.user._id)) {
+    throw ApiError.badRequest('You cannot bid on your own tender');
+  }
+  // One bid per contractor per tender, permanently — even a rejected or
+  // withdrawn bid doesn't free up a second attempt, so this checks for any
+  // prior bid regardless of status. The unique index on Bid (projectId +
+  // contractorId) is the hard guarantee for two simultaneous submit clicks
+  // racing past this check at the same instant; caught below as the
+  // friendlier version of that same conflict.
+  const existingBid = await Bid.findOne({ projectId: project._id, contractorId: req.user._id }).select('_id').lean();
+  if (existingBid) throw ApiError.conflict('You have already submitted a bid on this tender');
 
-  const bid = await Bid.create({ ...req.body, contractorId: req.user._id });
+  const { price, timelineDays, milestones = [], notes = '' } = req.body;
+  let bid;
+  try {
+    bid = await Bid.create({
+      ...req.body,
+      contractorId: req.user._id,
+      // The negotiation's opening round — every subsequent counter (either
+      // side) appends here; the top-level price/timelineDays/milestones
+      // fields above always mirror rounds[rounds.length - 1].
+      rounds: [{ proposedBy: 'contractor', price, timelineDays, milestones, message: notes, createdAt: new Date() }],
+      lastProposedBy: 'contractor',
+    });
+  } catch (err) {
+    if (err.code === 11000) throw ApiError.conflict('You have already submitted a bid on this tender');
+    throw err;
+  }
   await notificationService.notify(project.ownerId, 'bid_received', {
     projectId: project._id,
     bidId: bid._id,
   });
   return created(res, bid);
+});
+
+/** Either real party to this bid's negotiation — the tender owner or the
+ * bidding contractor — appends a new round (price/timeline/schedule/
+ * message) while the bid is still open. Unlike a strict alternating
+ * protocol, either side may counter again even before the other has
+ * responded — real negotiations aren't always strictly turn-based, and the
+ * only thing that actually matters is who proposed the *current* live
+ * terms (lastProposedBy), which is what accept/reject act on. */
+const counter = catchAsync(async (req, res) => {
+  const bid = await Bid.findById(req.params.id);
+  if (!bid) throw ApiError.notFound('Bid not found');
+  const project = await Project.findById(bid.projectId);
+  if (!project) throw ApiError.notFound('Project not found');
+
+  const isOwner = String(project.ownerId) === String(req.user._id);
+  const isBidder = String(bid.contractorId) === String(req.user._id);
+  if (!isOwner && !isBidder) throw ApiError.forbidden('Not a party to this negotiation');
+  if (bid.status !== 'submitted') throw ApiError.conflict(`Cannot counter a bid that is already ${bid.status}`);
+
+  const proposedBy = isOwner ? 'funder' : 'contractor';
+  const { price, timelineDays, milestones = [], message = '' } = req.body;
+  bid.rounds.push({ proposedBy, price, timelineDays, milestones, message, createdAt: new Date() });
+  bid.price = price;
+  bid.timelineDays = timelineDays;
+  bid.milestones = milestones;
+  bid.lastProposedBy = proposedBy;
+  await bid.save();
+
+  const notifyTarget = proposedBy === 'funder' ? bid.contractorId : project.ownerId;
+  await notificationService.notify(notifyTarget, 'bid_countered', { projectId: project._id, bidId: bid._id });
+
+  return ok(res, bid);
 });
 
 /** Contractor withdraws their own bid, or the tender owner accepts/rejects it. */
@@ -62,11 +147,50 @@ const updateStatus = catchAsync(async (req, res) => {
   }
   if (bid.status !== 'submitted') throw ApiError.conflict(`Bid already ${bid.status}`);
 
+  // The negotiation's final terms get locked onto the project the moment
+  // it's accepted — this is the actual "mutually accepted agreement"
+  // moment the whole negotiation was building toward. Only blocked once
+  // real money has already moved against the *original* numbers: changing
+  // the total after funding would desync the escrow ledger, and fixing
+  // that for real needs a refund/top-up flow this doesn't have.
+  const changesTerms = status === 'accepted' && (bid.price !== project.totalAmount || bid.milestones.length > 0);
+  if (changesTerms) {
+    const alreadyFunded = await Escrow.findOne({ projectId: project._id, type: 'fund', status: 'completed' }).select('_id').lean();
+    if (alreadyFunded) {
+      throw ApiError.conflict('This project has already received funding at its original terms — accepting different terms now would desync escrow. Reject or renegotiate before any funds are collected.');
+    }
+  }
+
   bid.status = status;
   await bid.save();
 
   let contract = null;
   if (status === 'accepted') {
+    if (changesTerms) {
+      project.totalAmount = bid.price;
+      if (bid.milestones.length > 0) {
+        project.milestones = bid.milestones.map((m, i) => ({ name: m.title, description: m.description, amount: m.amount, orderIndex: i }));
+      } else if (project.milestones.length > 0) {
+        // The accepted bid never proposed its own schedule (a lump-sum
+        // counter-offer) — the existing milestones still sum to whatever
+        // the *previous* totalAmount was, so leaving them as-is would let a
+        // negotiated price change silently desync from what escrow actually
+        // releases per milestone. Rescale each amount proportionally to the
+        // new total instead, keeping the same names/weights; the last
+        // milestone absorbs the rounding remainder so the sum is exact.
+        const oldTotal = project.milestones.reduce((sum, m) => sum + m.amount, 0);
+        let allocated = 0;
+        project.milestones.forEach((m, i) => {
+          if (i === project.milestones.length - 1) {
+            m.amount = bid.price - allocated;
+          } else {
+            const share = oldTotal > 0 ? Math.round((m.amount / oldTotal) * bid.price) : Math.round(bid.price / project.milestones.length);
+            m.amount = share;
+            allocated += share;
+          }
+        });
+      }
+    }
     // Separate lookups rather than populating `bid`/`project` themselves —
     // those are reused above for the raw-ObjectId auth checks
     // (`String(bid.contractorId) === ...`), which a populated field would
@@ -103,4 +227,4 @@ const updateStatus = catchAsync(async (req, res) => {
   return ok(res, { bid, contract });
 });
 
-module.exports = { getAll, getOne, create, updateStatus };
+module.exports = { getAll, getOne, create, counter, updateStatus };

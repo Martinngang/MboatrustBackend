@@ -2,6 +2,7 @@ const { TeamMember, User } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
+const { logAdminAction } = require('../services/adminActionLogService');
 
 /** Every roster row is implicitly scoped to req.user._id as the owner —
  * there's no route param for "whose team," so a caller can only ever
@@ -57,25 +58,49 @@ const claim = catchAsync(async (req, res) => {
   return ok(res, { claimed: result.modifiedCount });
 });
 
+/** Admin-only — every roster row platform-wide (getMine above is owner-
+ * scoped, and self-provisions an 'owner' row on first call — an admin
+ * calling this never triggers that side effect). */
+const getAll = catchAsync(async (req, res) => {
+  const { page = 1, limit = 20, ownerId, status } = req.query;
+  const filter = {};
+  if (ownerId) filter.ownerId = ownerId;
+  if (status) filter.status = status;
+
+  const [items, total] = await Promise.all([
+    TeamMember.find(filter).populate('ownerId', 'fullName').populate('userId', 'fullName').sort('-createdAt').skip((page - 1) * limit).limit(Number(limit)),
+    TeamMember.countDocuments(filter),
+  ]);
+  return ok(res, items, { page: Number(page), limit: Number(limit), total });
+});
+
 function assertOwnsAndNotSelf(member, req) {
   if (!member) throw ApiError.notFound('Team member not found');
-  if (String(member.ownerId) !== String(req.user._id)) throw ApiError.forbidden('Only the team owner can do this');
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  if (String(member.ownerId) !== String(req.user._id) && !isAdmin) throw ApiError.forbidden('Only the team owner can do this');
   if (member.role === 'owner') throw ApiError.conflict("Can't modify the owner's own row");
+  return isAdmin && String(member.ownerId) !== String(req.user._id);
 }
 
 const updateRole = catchAsync(async (req, res) => {
   const member = await TeamMember.findById(req.params.id);
-  assertOwnsAndNotSelf(member, req);
+  const asAdmin = assertOwnsAndNotSelf(member, req);
   member.role = req.body.role;
   await member.save();
+  if (asAdmin) {
+    await logAdminAction({ adminId: req.user._id, action: 'teamMember.updateRole', targetType: 'TeamMember', targetId: member._id, detail: { ownerId: member.ownerId, role: req.body.role } });
+  }
   return ok(res, member);
 });
 
 const remove = catchAsync(async (req, res) => {
   const member = await TeamMember.findById(req.params.id);
-  assertOwnsAndNotSelf(member, req);
+  const asAdmin = assertOwnsAndNotSelf(member, req);
   await member.deleteOne();
+  if (asAdmin) {
+    await logAdminAction({ adminId: req.user._id, action: 'teamMember.remove', targetType: 'TeamMember', targetId: member._id, detail: { ownerId: member.ownerId } });
+  }
   return res.status(204).send();
 });
 
-module.exports = { getMine, invite, claim, updateRole, remove };
+module.exports = { getMine, getAll, invite, claim, updateRole, remove };

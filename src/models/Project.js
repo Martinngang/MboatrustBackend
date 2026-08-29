@@ -9,6 +9,13 @@ const EvidenceSchema = new Schema(
       lat: { type: Number, default: null },
       lng: { type: Number, default: null },
     },
+    // Short, human-readable place name for `geotag` ("Bonabéri, Douala,
+    // Littoral Region"), resolved once at submission time (see
+    // projectController.submitEvidence + services/geocodingService) and
+    // persisted here so every later viewer (funder reviewing evidence,
+    // the contractor themselves) reads the same resolved name instead of
+    // raw coordinates or re-geocoding on every view.
+    placeName: { type: String, default: null },
     capturedAt: { type: Date, default: Date.now },
     fileHash: { type: String, default: null },
     locationMatch: { type: Boolean, default: null },
@@ -24,6 +31,15 @@ const ApproverSchema = new Schema(
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
     decidedAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
+const ChangeRequestSchema = new Schema(
+  {
+    reason: { type: String, required: true },
+    requestedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    requestedAt: { type: Date, default: Date.now },
   },
   { _id: false }
 );
@@ -44,6 +60,11 @@ const MilestoneSchema = new Schema(
     requiresCosigner: { type: Boolean, default: false },
     evidence: { type: [EvidenceSchema], default: [] },
     approvers: { type: [ApproverSchema], default: [] },
+    // A lighter-weight, resubmittable alternative to a formal Dispute — the
+    // project owner sends the milestone back to 'pending' with a reason
+    // instead of escalating. Full history kept (not just the latest one) so
+    // both parties can see every round of back-and-forth on this milestone.
+    changeRequests: { type: [ChangeRequestSchema], default: [] },
   },
   { timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' } }
 );
@@ -79,6 +100,13 @@ const ProjectSchema = new Schema(
     // /projects/:id/co-signer. No pre-existing co-signer identity concept
     // existed anywhere in the schema before this field.
     coSignerId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    // Funder's choice at creation time: 'contractor' (default, today's only
+    // behavior — whoever does the work sources their own materials) or
+    // 'quincaillerie', which requires preferredQuincaillerieId below and
+    // makes that store the pre-selected supplier RequestMaterialsScreen
+    // offers for every milestone on this project.
+    materialsManagedBy: { type: String, enum: ['contractor', 'quincaillerie'], default: 'contractor' },
+    preferredQuincaillerieId: { type: Schema.Types.ObjectId, ref: 'QuincaillerieProfile', default: null },
     milestones: { type: [MilestoneSchema], default: [] },
   },
   { timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' } }

@@ -49,8 +49,8 @@ async function notify(userId, type, payload = {}) {
   return notification;
 }
 
-async function notifyMany(userIds, type, payload = {}) {
-  const docs = userIds.map((userId) => ({ userId, type, payload, read: false }));
+async function notifyMany(userIds, type, payload = {}, extra = {}) {
+  const docs = userIds.map((userId) => ({ userId, type, payload, read: false, ...extra }));
   const created = await Notification.insertMany(docs);
   const category = categoryForType(type);
   await Promise.all(

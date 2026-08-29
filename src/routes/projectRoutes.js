@@ -9,9 +9,11 @@ const idempotent = require('../middleware/idempotency');
 const {
   createProject,
   updateProject,
+  assignQuincaillerie,
   fundProject,
   submitEvidence,
   decideApproval,
+  requestChanges,
 } = require('../validators/projectValidators');
 const { createDispute } = require('../validators/disputeValidators');
 
@@ -30,6 +32,12 @@ router.post(
   authenticate,
   validate(z.object({ coSignerId: z.string().min(1) })),
   projectController.addCoSigner
+);
+router.post(
+  '/:id/assign-quincaillerie',
+  authenticate,
+  validate(assignQuincaillerie),
+  projectController.assignQuincaillerie
 );
 router.get('/:projectId/recommended-contractors', authenticate, matchingController.getRecommended);
 router.get('/:projectId/bids-with-scores', authenticate, matchingController.getBidsWithScores);
@@ -50,6 +58,12 @@ router.post(
   idempotent,
   validate(decideApproval),
   projectController.decideApproval
+);
+router.post(
+  '/:id/milestones/:milestoneId/request-changes',
+  authenticate,
+  validate(requestChanges),
+  projectController.requestMilestoneChanges
 );
 router.post(
   '/:id/milestones/:milestoneId/dispute',

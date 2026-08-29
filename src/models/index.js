@@ -19,6 +19,7 @@ module.exports = {
   Rating: require('./Rating'),
   RiskFlag: require('./RiskFlag'),
   Conversation: require('./Conversation'),
+  ConversationParticipant: require('./ConversationParticipant'),
   Message: require('./Message'),
   Notification: require('./Notification'),
   Referral: require('./Referral'),
@@ -28,5 +29,9 @@ module.exports = {
   TeamMember: require('./TeamMember'),
   ProjectTemplate: require('./ProjectTemplate'),
   VerifierProfile: require('./VerifierProfile'),
+  QuincaillerieProfile: require('./QuincaillerieProfile'),
+  InventoryItem: require('./InventoryItem'),
+  MaterialOrder: require('./MaterialOrder'),
   SystemEvent: require('./SystemEvent'),
+  AdminActionLog: require('./AdminActionLog'),
 };

@@ -4,6 +4,7 @@ const env = require('../config/env');
 const { Escrow, Project } = require('../models');
 const catchAsync = require('../utils/catchAsync');
 const { logEvent } = require('../services/systemEventService');
+const orangeMoneyProvider = require('../services/paymentProviders/orangeMoneyProvider');
 
 const stripe = env.stripe.secretKey ? new Stripe(env.stripe.secretKey) : null;
 
@@ -13,7 +14,7 @@ const stripe = env.stripe.secretKey ? new Stripe(env.stripe.secretKey) : null;
 const notify = catchAsync(async (req, res) => {
   const payload = { ...req.query, ...req.body };
   const reference = payload.pay_token || payload.notif_token || payload.token;
-  const statusRaw = String(payload.status || '').toUpperCase();
+  const claimedStatus = String(payload.status || '').toUpperCase();
   if (!reference) {
     logEvent({ type: 'webhook_error', source: 'paymentWebhookController.notify', detail: { reason: 'missing payment token', payload } }).catch(() => {});
     return res.status(400).json({ success: false, error: 'missing payment token' });
@@ -26,7 +27,21 @@ const notify = catchAsync(async (req, res) => {
   }
 
   if (escrow.status === 'pending') {
+    // The WebPay notify payload carries no signature — trusting its
+    // `status` field directly would let anyone who learns/guesses a
+    // pay_token POST a fake SUCCESS. Re-verify with Orange directly first;
+    // only fall back to the payload's own claim when unconfigured or the
+    // real check fails (matches every other provider's mock-tolerant
+    // degradation, so sandbox/local dev without real Orange credentials
+    // keeps working exactly as before).
+    const orderId = `fund_${escrow.projectId}`;
+    const verified = await orangeMoneyProvider.verifyTransactionStatus({ orderId, amount: escrow.grossAmount, payToken: reference });
+    if (verified === null) {
+      logEvent({ type: 'webhook_warning', source: 'paymentWebhookController.notify', detail: { reason: 'could not independently verify status — trusting webhook payload as a fallback', reference, claimedStatus } }).catch(() => {});
+    }
+    const statusRaw = verified ?? claimedStatus;
     escrow.status = ['SUCCESS', 'SUCCESSFUL'].includes(statusRaw) ? 'completed' : statusRaw === 'FAILED' ? 'failed' : 'pending';
+    escrow.statusHistory.push({ status: escrow.status, detail: verified !== null ? 'orange_money webhook callback (independently verified)' : 'orange_money webhook callback (unverified — trusted payload)' });
     await escrow.save();
 
     if (escrow.status === 'completed' && escrow.type === 'fund') {
@@ -35,6 +50,7 @@ const notify = catchAsync(async (req, res) => {
         project.status = 'funded';
         await project.save();
       }
+      logEvent({ type: 'payment_processed', severity: 'info', source: 'paymentWebhookController.notify', detail: { escrowId: escrow._id, projectId: escrow.projectId, amount: escrow.netAmount, currency: escrow.currency, verified: verified !== null } }).catch(() => {});
     }
   }
 
@@ -62,6 +78,7 @@ const stripeWebhook = catchAsync(async (req, res) => {
     const escrow = await Escrow.findOne({ paymentProvider: 'stripe', providerReference: pi.id });
     if (escrow && escrow.status === 'pending') {
       escrow.status = status;
+      escrow.statusHistory.push({ status, detail: `stripe webhook: ${event.type}` });
       await escrow.save();
       if (status === 'completed' && escrow.type === 'fund') {
         const project = await Project.findById(escrow.projectId);
@@ -69,6 +86,9 @@ const stripeWebhook = catchAsync(async (req, res) => {
           project.status = 'funded';
           await project.save();
         }
+      }
+      if (status === 'completed') {
+        logEvent({ type: 'payment_processed', severity: 'info', source: 'paymentWebhookController.stripeWebhook', detail: { escrowId: escrow._id, projectId: escrow.projectId, amount: escrow.netAmount, currency: escrow.currency, eventType: event.type } }).catch(() => {});
       }
     }
   }
@@ -89,11 +109,23 @@ const flutterwaveWebhook = catchAsync(async (req, res) => {
   const raw = req.rawBody || Buffer.from(JSON.stringify(req.body));
   const signature = req.headers['verif-hash'] || req.headers['x-flw-signature'];
 
-  if (env.flutterwave.secretKey && signature) {
+  if (env.flutterwave.secretKey) {
+    // Previously "failed open" here — a missing signature header was
+    // silently trusted rather than rejected whenever a real secret key WAS
+    // configured, letting anyone POST a fake "successful" status straight
+    // to this endpoint with no signature at all. Only skip verification
+    // entirely when no secret key is configured (unconfigured/local/sandbox
+    // dev, matching every other provider's mock-tolerant convention) —
+    // once a real key exists, a missing or wrong signature is now always a
+    // hard 401.
+    if (!signature) {
+      logEvent({ type: 'webhook_error', source: 'paymentWebhookController.flutterwaveWebhook', detail: { reason: 'missing signature header' } }).catch(() => {});
+      return res.status(401).json({ success: false, error: 'Missing signature' });
+    }
     const expected = crypto.createHmac('sha256', env.flutterwave.secretKey).update(raw).digest('hex');
     if (signature !== expected) {
       logEvent({ type: 'webhook_error', source: 'paymentWebhookController.flutterwaveWebhook', detail: { reason: 'invalid signature' } }).catch(() => {});
-      return res.status(400).json({ success: false, error: 'Invalid signature' });
+      return res.status(401).json({ success: false, error: 'Invalid signature' });
     }
   }
 
@@ -115,6 +147,7 @@ const flutterwaveWebhook = catchAsync(async (req, res) => {
 
   if (escrow.status === 'pending') {
     escrow.status = String(statusRaw).toLowerCase() === 'successful' ? 'completed' : String(statusRaw).toLowerCase() === 'failed' ? 'failed' : escrow.status;
+    escrow.statusHistory.push({ status: escrow.status, detail: 'flutterwave webhook callback' });
     await escrow.save();
 
     if (escrow.status === 'completed' && escrow.type === 'fund') {
@@ -123,6 +156,7 @@ const flutterwaveWebhook = catchAsync(async (req, res) => {
         project.status = 'funded';
         await project.save();
       }
+      logEvent({ type: 'payment_processed', severity: 'info', source: 'paymentWebhookController.flutterwaveWebhook', detail: { escrowId: escrow._id, projectId: escrow.projectId, amount: escrow.netAmount, currency: escrow.currency } }).catch(() => {});
     }
   }
 

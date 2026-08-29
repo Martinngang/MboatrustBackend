@@ -6,6 +6,7 @@ const { buildCrud } = require('./controllerFactory');
 const storageService = require('../services/storageService');
 const { initFirebase } = require('../config/firebase');
 const { hardDeleteUser } = require('../services/userDeletionService');
+const { logAdminAction } = require('../services/adminActionLogService');
 
 const crud = buildCrud(User, { searchableFilters: ['kycStatus'] });
 
@@ -71,11 +72,16 @@ const setDeviceToken = catchAsync(async (req, res) => {
  * too, not just kycStatus, since an admin user-list needs both. Never
  * mounted without an admin gate (see routes/userRoutes.js). */
 const adminGetAll = catchAsync(async (req, res) => {
-  const { page = 1, limit = 20, role, kycStatus, isActive } = req.query;
+  const { page = 1, limit = 20, role, kycStatus, isActive, search } = req.query;
   const filter = {};
   if (role) filter['roles.roleType'] = role;
   if (kycStatus) filter.kycStatus = kycStatus;
   if (isActive !== undefined) filter.isActive = isActive === 'true';
+  if (search) {
+    const escaped = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(escaped, 'i');
+    filter.$or = [{ fullName: pattern }, { email: pattern }, { phoneNumber: pattern }];
+  }
 
   const [items, total] = await Promise.all([
     User.find(filter).sort('-createdAt').skip((page - 1) * limit).limit(Number(limit)),
@@ -90,6 +96,88 @@ const adminGetOne = catchAsync(async (req, res) => {
   return ok(res, user);
 });
 
+/** Admin-created account — no firebaseUid yet; the real person links it on
+ * their first actual Firebase sign-in (see middleware/auth.js's
+ * resolveUser, which now matches by email for exactly this case instead of
+ * JIT-provisioning a duplicate). */
+const adminCreate = catchAsync(async (req, res) => {
+  const { fullName, email, phoneNumber, roles } = req.body;
+  const user = await User.create({
+    fullName,
+    email,
+    phoneNumber,
+    roles: (roles || []).map((roleType) => ({ roleType })),
+  });
+  await logAdminAction({ adminId: req.user._id, action: 'user.create', targetType: 'User', targetId: user._id, detail: { email, roles } });
+  return ok(res, user, undefined, 201);
+});
+
+/** Strict-validator-gated (see validators/userValidators.js's
+ * adminUpdateUser) — never a raw passthrough. Reuses the same
+ * findByIdAndUpdate shape as buildCrud's generic `update`, just under an
+ * admin-only route with its own validator instead of that unrouted one. */
+const adminUpdate = catchAsync(async (req, res) => {
+  const user = await User.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+  if (!user) throw ApiError.notFound('User not found');
+  await logAdminAction({ adminId: req.user._id, action: 'user.update', targetType: 'User', targetId: user._id, detail: { fields: Object.keys(req.body) } });
+  return ok(res, user);
+});
+
+/** Admin-only — sets a user's Firebase Auth password directly, via the
+ * Firebase Admin SDK (never touches User.passwordHash, which is unused for
+ * any real auth flow — Firebase is the actual identity provider). Only
+ * works for a user with a real linked Firebase account; a dev-seeded
+ * placeholder firebaseUid (or no Firebase project configured at all) fails
+ * cleanly with a clear reason rather than silently no-op'ing, since
+ * "change the password" has no meaningful partial-success outcome the way
+ * revokeSessions's best-effort semantics do.
+ *
+ * TEMPORARY: the user asked for this to be added now and removed later —
+ * do not treat this as a permanent part of the admin surface. */
+const adminChangePassword = catchAsync(async (req, res) => {
+  const user = await User.findById(req.params.id);
+  if (!user) throw ApiError.notFound('User not found');
+
+  const admin = initFirebase();
+  if (!user.firebaseUid || !admin) {
+    throw ApiError.badRequest('This account has no linked Firebase identity to set a password on');
+  }
+  // devController.js's DEV_AUTH_BYPASS demo users (and any other dev-seeded
+  // account created the same way) are stamped with the literal `dev-<role>`
+  // placeholder as firebaseUid — never a real Firebase Auth UID — so
+  // updateUser() below would always 404 with Firebase's own confusing
+  // "no user record corresponding to the provided identifier" instead of
+  // explaining why. Catch it here with the real reason instead.
+  if (user.firebaseUid.startsWith('dev-')) {
+    throw ApiError.badRequest('This is a dev/demo account with no real Firebase identity — its password can\'t be changed this way.');
+  }
+
+  await admin
+    .auth()
+    .updateUser(user.firebaseUid, { password: req.body.newPassword })
+    .catch((err) => {
+      if (err.code === 'auth/user-not-found') {
+        throw ApiError.badRequest('This account\'s Firebase identity no longer exists (it may have been deleted directly in Firebase) — password can\'t be changed.');
+      }
+      throw ApiError.badRequest(`Could not update the password: ${err.message}`);
+    });
+
+  await logAdminAction({ adminId: req.user._id, action: 'user.changePassword', targetType: 'User', targetId: user._id, detail: { email: user.email } });
+  return ok(res, { success: true });
+});
+
+/** Real hard delete of ANY user, unlike deleteMe (self only) — reuses the
+ * exact same userDeletionService.hardDeleteUser, same {confirm:'DELETE'}
+ * gate as the self-service path. */
+const adminDelete = catchAsync(async (req, res) => {
+  const user = await User.findById(req.params.id);
+  if (!user) throw ApiError.notFound('User not found');
+  const email = user.email;
+  const result = await hardDeleteUser(req.params.id);
+  await logAdminAction({ adminId: req.user._id, action: 'user.delete', targetType: 'User', targetId: req.params.id, detail: { email } });
+  return ok(res, result);
+});
+
 /** Soft status flip, not a hard delete — every other destructive-feeling
  * action in this codebase (bids, disputes, contracts) works the same way,
  * and a User has too much linked data (projects, bids, escrows) to ever
@@ -97,6 +185,7 @@ const adminGetOne = catchAsync(async (req, res) => {
 const deactivate = catchAsync(async (req, res) => {
   const user = await User.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
   if (!user) throw ApiError.notFound('User not found');
+  await logAdminAction({ adminId: req.user._id, action: 'user.deactivate', targetType: 'User', targetId: user._id, detail: { email: user.email } });
   return ok(res, user);
 });
 
@@ -130,6 +219,7 @@ const deleteMe = catchAsync(async (req, res) => {
 const reactivate = catchAsync(async (req, res) => {
   const user = await User.findByIdAndUpdate(req.params.id, { isActive: true }, { new: true });
   if (!user) throw ApiError.notFound('User not found');
+  await logAdminAction({ adminId: req.user._id, action: 'user.reactivate', targetType: 'User', targetId: user._id, detail: { email: user.email } });
   return ok(res, user);
 });
 
@@ -138,6 +228,7 @@ const revokeRole = catchAsync(async (req, res) => {
   if (!user) throw ApiError.notFound('User not found');
   user.roles = user.roles.filter((r) => r.roleType !== req.params.roleType);
   await user.save();
+  await logAdminAction({ adminId: req.user._id, action: 'user.revokeRole', targetType: 'User', targetId: user._id, detail: { roleType: req.params.roleType } });
   return ok(res, user);
 });
 
@@ -152,6 +243,7 @@ const grantRole = catchAsync(async (req, res) => {
   if (!user.roles.some((r) => r.roleType === roleType)) {
     user.roles.push({ roleType });
     await user.save();
+    await logAdminAction({ adminId: req.user._id, action: 'user.grantRole', targetType: 'User', targetId: user._id, detail: { roleType } });
   }
   return ok(res, user);
 });
@@ -228,11 +320,14 @@ const search = catchAsync(async (req, res) => {
 
   const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = new RegExp(escaped, 'i');
+  
   const users = await User.find({
     _id: { $ne: req.user._id },
-    $or: [{ fullName: pattern }, { email: pattern }, { phoneNumber: pattern }],
+    isActive: true,
+    'roles.roleType': { $ne: 'admin' },
+    fullName: pattern, // Name search only, as requested
   })
-    .select('fullName email phoneNumber avatarUrl roles')
+    .select('_id fullName avatarUrl') // Minimal fields
     .limit(10);
   return ok(res, users);
 });
@@ -243,6 +338,43 @@ const getPublicProfile = catchAsync(async (req, res) => {
   );
   if (!user) throw ApiError.notFound('User not found');
   return ok(res, user);
+});
+
+// ── Payout method management ─────────────────────────────────────────────────
+
+const addPayoutMethod = catchAsync(async (req, res) => {
+  const user = await User.findById(req.user._id);
+  if (user.payoutMethods.length >= 5) {
+    throw new ApiError(400, 'Maximum of 5 payout methods allowed');
+  }
+  const { label, provider, phoneNumber } = req.body;
+  const isFirst = user.payoutMethods.length === 0;
+  user.payoutMethods.push({ label, provider, phoneNumber, isDefault: isFirst });
+  await user.save();
+  return ok(res, { payoutMethods: user.payoutMethods });
+});
+
+const removePayoutMethod = catchAsync(async (req, res) => {
+  const user = await User.findById(req.user._id);
+  const method = user.payoutMethods.id(req.params.methodId);
+  if (!method) throw new ApiError(404, 'Payout method not found');
+  const wasDefault = method.isDefault;
+  user.payoutMethods.pull({ _id: req.params.methodId });
+  if (wasDefault && user.payoutMethods.length > 0) {
+    user.payoutMethods[0].isDefault = true;
+  }
+  await user.save();
+  return ok(res, { payoutMethods: user.payoutMethods });
+});
+
+const setDefaultPayoutMethod = catchAsync(async (req, res) => {
+  const user = await User.findById(req.user._id);
+  const method = user.payoutMethods.id(req.params.methodId);
+  if (!method) throw new ApiError(404, 'Payout method not found');
+  user.payoutMethods.forEach(m => { m.isDefault = false; });
+  method.isDefault = true;
+  await user.save();
+  return ok(res, { payoutMethods: user.payoutMethods });
 });
 
 module.exports = {
@@ -262,8 +394,15 @@ module.exports = {
   getPublicProfile,
   adminGetAll,
   adminGetOne,
+  adminCreate,
+  adminUpdate,
+  adminDelete,
+  adminChangePassword,
   deactivate,
   reactivate,
   revokeRole,
   grantRole,
+  addPayoutMethod,
+  removePayoutMethod,
+  setDefaultPayoutMethod,
 };

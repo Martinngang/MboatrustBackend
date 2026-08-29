@@ -23,6 +23,16 @@ const DEMO_USERS = {
   recipient: { fullName: 'Demo Recipient', email: 'demo-recipient@mboatrust.test', roleType: 'recipient' },
   contractor: { fullName: 'Demo Contractor', email: 'demo-contractor@mboatrust.test', roleType: 'contractor' },
   seller: { fullName: 'Demo Seller', email: 'demo-seller@mboatrust.test', roleType: 'land_seller' },
+  // Every account whose frontend `role` is legitimately null — an
+  // admin-only account, or a quincaillerie-only one before/without
+  // approval (see Onboarding.tsx's RoleScreen) — resolves here instead of
+  // colliding with a real role's demo identity. context.tsx passes this
+  // exact key via `role ?? 'null-role'`. roleType is null on purpose: this
+  // identity starts with no primary role at all (only the verifier/admin
+  // convenience roles below), so registering as quincaillerie through it
+  // still exercises the real pending→approve pipeline instead of the role
+  // being pre-seeded for free.
+  'null-role': { fullName: 'Demo Account (No Primary Role)', email: 'demo-null-role@mboatrust.test', roleType: null },
 };
 
 const getOrCreateDemoUser = catchAsync(async (req, res) => {
@@ -34,10 +44,19 @@ const getOrCreateDemoUser = catchAsync(async (req, res) => {
   // The sidebar exposes Verifier/Admin panels from any logged-in role (see
   // WORKSPACE_LINKS) as a demo convenience — so every dev user also gets
   // 'verifier' and 'admin' roles, matching that UX, rather than needing a
-  // separate identity-switch just to exercise those screens.
-  const wantedRoles = [...new Set([template.roleType, 'verifier', 'admin'])];
+  // separate identity-switch just to exercise those screens. Filtered for
+  // Boolean since the 'null-role' template's roleType is deliberately null.
+  const wantedRoles = [...new Set([template.roleType, 'verifier', 'admin'].filter(Boolean))];
 
-  let user = await User.findOne({ email: template.email });
+  // Keyed by firebaseUid, not email — `dev-${role}` is the actual stable,
+  // deterministic identity this function relies on (and the field the
+  // unique index is really enforcing). Looking up by email instead used to
+  // 409 with "Duplicate value for: firebaseUid" for any role whose DB
+  // record predates a DEMO_USERS email-string change (e.g. the contractor
+  // entry here was once `contractor@mboatrust.test`, no "demo-" prefix) —
+  // the email lookup found nothing, so create() ran anyway and collided
+  // with the real unique key on the pre-existing row.
+  let user = await User.findOne({ firebaseUid: `dev-${role}` });
   if (!user) {
     user = await User.create({
       fullName: template.fullName,

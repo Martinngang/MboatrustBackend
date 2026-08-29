@@ -20,6 +20,26 @@ const ContractorProfileSchema = new Schema(
       lng: { type: Number, default: null },
     },
     bio: { type: String, default: '' },
+    // Short professional tagline shown at the top of the public portfolio
+    // (e.g. "Master Plumber — 12 years, Douala") — distinct from bio, which
+    // is the longer free-text description below it.
+    headline: { type: String, default: '' },
+    // Free-form list of services offered (e.g. "Roof installation"), separate
+    // from `categories` (the trade/specialty taxonomy the matching service
+    // scores against) — a contractor can offer several services within one
+    // trade category.
+    services: { type: [String], default: [] },
+    // Showcase gallery for the public portfolio. Not tied to a real Project
+    // record on purpose — a contractor's best work often predates the
+    // platform, so forcing every image to reference a real completed
+    // project here would exclude legitimate portfolio material. Real
+    // platform work is surfaced separately (see
+    // contractorProfileController.getCompletedWork, computed live from
+    // Contract/Bid — never duplicated onto this document).
+    portfolioImages: {
+      type: [{ url: { type: String, required: true }, caption: { type: String, default: '' } }],
+      default: [],
+    },
     yearsExperience: { type: Number, default: 0, min: 0 },
     // Global quick-toggle used by contractorMatchingService's scoring.
     isAvailable: { type: Boolean, default: true },

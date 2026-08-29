@@ -6,6 +6,7 @@ const { connectDB } = require('./config/db');
 const app = require('./app');
 const { resolveUser } = require('./middleware/auth');
 const { Conversation } = require('./models');
+const { bootstrapInitialAdmin } = require('./services/bootstrapAdminService');
 
 async function main() {
   // DEV_AUTH_BYPASS trusts a client-supplied x-dev-user-id header with zero
@@ -19,6 +20,7 @@ async function main() {
   }
 
   await connectDB();
+  await bootstrapInitialAdmin();
 
   const server = http.createServer(app);
   const io = new Server(server, { cors: { origin: env.clientOrigins } });
@@ -36,23 +38,52 @@ async function main() {
     next();
   });
 
+  // Presence Tracking
+  const onlineUsers = new Map(); // userId -> connectionCount
+
   io.on('connection', (socket) => {
+    const userId = socket.data.userId;
+    const currentCount = onlineUsers.get(userId) || 0;
+    onlineUsers.set(userId, currentCount + 1);
+    
+    if (currentCount === 0) {
+      // User came online
+      io.emit('presence:online', { userId });
+    }
+
     socket.on('conversation:join', async (conversationId) => {
-      // Only an actual participant can join the room — otherwise any
-      // connected client could read another conversation's live messages
-      // just by knowing (or guessing) its id.
       const conversation = await Conversation.findById(conversationId).select('participantIds').catch(() => null);
       if (!conversation) return;
       const isParticipant = conversation.participantIds.some((id) => String(id) === socket.data.userId);
       if (!isParticipant) return;
       socket.join(`conversation:${conversationId}`);
     });
+    
     socket.on('conversation:leave', (conversationId) => {
       socket.leave(`conversation:${conversationId}`);
+    });
+
+    socket.on('typing:start', ({ conversationId, fullName }) => {
+      socket.to(`conversation:${conversationId}`).emit('typing:start', { userId: socket.data.userId, fullName });
+    });
+
+    socket.on('typing:stop', ({ conversationId, fullName }) => {
+      socket.to(`conversation:${conversationId}`).emit('typing:stop', { userId: socket.data.userId, fullName });
+    });
+
+    socket.on('disconnect', () => {
+      const count = onlineUsers.get(userId) || 0;
+      if (count <= 1) {
+        onlineUsers.delete(userId);
+        io.emit('presence:offline', { userId });
+      } else {
+        onlineUsers.set(userId, count - 1);
+      }
     });
   });
 
   app.set('io', io);
+  app.set('onlineUsers', onlineUsers);
 
   server.listen(env.port, () => {
     console.log(`[server] Mboa Trust API listening on port ${env.port} (${env.nodeEnv})`);

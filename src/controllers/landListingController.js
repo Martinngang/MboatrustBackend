@@ -1,4 +1,4 @@
-const { LandListing, Project, RiskFlag } = require('../models');
+const { LandListing, Project, RiskFlag, User, LandOffer, VisitRequest } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
@@ -6,13 +6,20 @@ const storageService = require('../services/storageService');
 const landDuplicateService = require('../services/landDuplicateService');
 const notificationService = require('../services/notificationService');
 const { getRecommendedListings } = require('../services/landMatchingService');
+const { logAdminAction } = require('../services/adminActionLogService');
 
 const getAll = catchAsync(async (req, res) => {
-  const { page = 1, limit = 20, verificationStatus, sellerId, disputeFlag } = req.query;
+  const { page = 1, limit = 20, verificationStatus, sellerId, disputeFlag, search } = req.query;
   const filter = {};
   if (verificationStatus) filter.verificationStatus = verificationStatus;
   if (sellerId) filter.sellerId = sellerId;
   if (disputeFlag !== undefined) filter.disputeFlag = disputeFlag === 'true';
+  if (search) {
+    const escaped = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(escaped, 'i');
+    const matchingSellerIds = await User.find({ fullName: pattern }).select('_id').lean();
+    filter.$or = [{ title: pattern }, { region: pattern }, { city: pattern }, { sellerId: { $in: matchingSellerIds.map((u) => u._id) } }];
+  }
 
   const [items, total] = await Promise.all([
     LandListing.find(filter)
@@ -85,17 +92,25 @@ const create = catchAsync(async (req, res) => {
 const update = catchAsync(async (req, res) => {
   const listing = await LandListing.findById(req.params.id);
   if (!listing) throw ApiError.notFound('Land listing not found');
-  if (String(listing.sellerId) !== String(req.user._id)) throw ApiError.forbidden();
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  if (String(listing.sellerId) !== String(req.user._id) && !isAdmin) throw ApiError.forbidden();
   Object.assign(listing, req.body);
   await listing.save();
+  if (isAdmin && String(listing.sellerId) !== String(req.user._id)) {
+    await logAdminAction({ adminId: req.user._id, action: 'land.update', targetType: 'LandListing', targetId: listing._id, detail: { fields: Object.keys(req.body) } });
+  }
   return ok(res, listing);
 });
 
 const remove = catchAsync(async (req, res) => {
   const listing = await LandListing.findById(req.params.id);
   if (!listing) throw ApiError.notFound('Land listing not found');
-  if (String(listing.sellerId) !== String(req.user._id)) throw ApiError.forbidden();
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  if (String(listing.sellerId) !== String(req.user._id) && !isAdmin) throw ApiError.forbidden();
   await listing.deleteOne();
+  if (isAdmin && String(listing.sellerId) !== String(req.user._id)) {
+    await logAdminAction({ adminId: req.user._id, action: 'land.remove', targetType: 'LandListing', targetId: listing._id, detail: { title: listing.title } });
+  }
   return res.status(204).send();
 });
 
@@ -130,7 +145,24 @@ const updateVerificationStatus = catchAsync(async (req, res) => {
     if (req.body.disputeReason) listing.disputeReason = req.body.disputeReason;
   }
   await listing.save();
+  // Only when the actor actually holds admin (this route is also reachable
+  // by 'verifier', which isn't an admin action worth auditing the same way).
+  if (req.user.roles?.some((r) => r.roleType === 'admin')) {
+    await logAdminAction({ adminId: req.user._id, action: 'landListing.updateVerificationStatus', targetType: 'LandListing', targetId: listing._id, detail: { verificationStatus: listing.verificationStatus } });
+  }
   return ok(res, listing);
+});
+
+/** Admin-only reads for the management drawer — a listing's offers and
+ * scheduled visits, neither of which had any admin-facing route before. */
+const getOffersForListing = catchAsync(async (req, res) => {
+  const offers = await LandOffer.find({ listingId: req.params.id }).populate('buyerId', 'fullName').sort('-createdAt');
+  return ok(res, offers);
+});
+
+const getVisitRequestsForListing = catchAsync(async (req, res) => {
+  const visits = await VisitRequest.find({ listingId: req.params.id }).populate('requestedBy', 'fullName').sort('-createdAt');
+  return ok(res, visits);
 });
 
 /**
@@ -190,4 +222,4 @@ const purchase = catchAsync(async (req, res) => {
   return created(res, { listing, project });
 });
 
-module.exports = { getAll, getOne, getRecommended, create, update, remove, addDocument, updateVerificationStatus, purchase, createPurchaseProject };
+module.exports = { getAll, getOne, getRecommended, create, update, remove, addDocument, updateVerificationStatus, purchase, createPurchaseProject, getOffersForListing, getVisitRequestsForListing };

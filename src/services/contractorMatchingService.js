@@ -1,6 +1,6 @@
 const { Project, User, ContractorProfile, ContractorCertification } = require('../models');
 const { haversineDistanceMeters } = require('../utils/geo');
-const { getStats } = require('../controllers/contractorProfileController');
+const { getStats } = require('./contractorStatsService');
 const ApiError = require('../utils/ApiError');
 
 const LOCATION_FULL_CREDIT_M = 20_000; // under 20km: full marks

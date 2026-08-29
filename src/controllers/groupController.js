@@ -4,6 +4,7 @@ const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const notificationService = require('../services/notificationService');
 const { getFundingSummaryData } = require('./projectController');
+const { logAdminAction } = require('../services/adminActionLogService');
 
 const create = catchAsync(async (req, res) => {
   const group = await Group.create({
@@ -66,6 +67,29 @@ const getMine = catchAsync(async (req, res) => {
   return ok(res, groups);
 });
 
+/** Admin-only — every group platform-wide (getMine above is /mine-scoped
+ * for the consumer app; nothing before this listed all of them). */
+const getAll = catchAsync(async (req, res) => {
+  const { page = 1, limit = 20, search } = req.query;
+  const filter = {};
+  if (search) {
+    const escaped = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    filter.name = new RegExp(escaped, 'i');
+  }
+
+  const [groups, total] = await Promise.all([
+    Group.find(filter).populate('createdBy', 'fullName').sort('-createdAt').skip((page - 1) * limit).limit(Number(limit)),
+    Group.countDocuments(filter),
+  ]);
+  const memberCounts = await GroupMember.aggregate([
+    { $match: { groupId: { $in: groups.map((g) => g._id) } } },
+    { $group: { _id: '$groupId', count: { $sum: 1 } } },
+  ]);
+  const countByGroup = new Map(memberCounts.map((c) => [String(c._id), c.count]));
+  const items = groups.map((g) => ({ ...g.toObject(), memberCount: countByGroup.get(String(g._id)) || 0 }));
+  return ok(res, items, { page: Number(page), limit: Number(limit), total });
+});
+
 const getOne = catchAsync(async (req, res) => {
   const group = await Group.findById(req.params.id);
   if (!group) throw ApiError.notFound('Group not found');
@@ -105,4 +129,30 @@ const getDashboard = catchAsync(async (req, res) => {
   });
 });
 
-module.exports = { create, invite, join, leave, getMine, getOne, getDashboard };
+/** Admin-only moderation edit — no owner-editable equivalent exists yet
+ * (see routes/groupRoutes.js's comment), so this is deliberately the only
+ * path onto a Group's name/description/purpose. */
+const update = catchAsync(async (req, res) => {
+  const group = await Group.findById(req.params.id);
+  if (!group) throw ApiError.notFound('Group not found');
+  const { name, description, purpose } = req.body;
+  if (name !== undefined) group.name = name;
+  if (description !== undefined) group.description = description;
+  if (purpose !== undefined) group.purpose = purpose;
+  await group.save();
+  await logAdminAction({ adminId: req.user._id, action: 'group.update', targetType: 'Group', targetId: group._id, detail: { fields: Object.keys(req.body) } });
+  return ok(res, group);
+});
+
+/** Admin-only disband — cascades to every GroupMember row so no orphaned
+ * memberships are left pointing at a deleted group. */
+const remove = catchAsync(async (req, res) => {
+  const group = await Group.findById(req.params.id);
+  if (!group) throw ApiError.notFound('Group not found');
+  await GroupMember.deleteMany({ groupId: group._id });
+  await group.deleteOne();
+  await logAdminAction({ adminId: req.user._id, action: 'group.remove', targetType: 'Group', targetId: group._id, detail: { name: group.name } });
+  return res.status(204).send();
+});
+
+module.exports = { create, invite, join, leave, getMine, getAll, getOne, getDashboard, update, remove };

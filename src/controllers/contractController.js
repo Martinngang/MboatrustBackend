@@ -1,9 +1,10 @@
 const { Contract, Project, Bid } = require('../models');
 const ApiError = require('../utils/ApiError');
-const { ok } = require('../utils/apiResponse');
+const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const notificationService = require('../services/notificationService');
 const referralService = require('../services/referralService');
+const { logAdminAction } = require('../services/adminActionLogService');
 
 /** A contract's only two real parties: the project owner (funder) and the
  * bid's contractor — resolved fresh from Project/Bid rather than stored
@@ -30,11 +31,18 @@ async function assertParty(contract, user) {
  * (buildCrud's generic getAll/getOne), letting any authenticated user read
  * every contract on the platform. */
 const getAll = catchAsync(async (req, res) => {
-  const { page = 1, limit = 20, projectId, bidId, status } = req.query;
+  const { page = 1, limit = 20, projectId, bidId, status, contractorId } = req.query;
   const filter = {};
   if (projectId) filter.projectId = projectId;
   if (bidId) filter.bidId = bidId;
   if (status) filter.status = status;
+  // Contract has no direct contractor field (only bidId) — same
+  // resolve-via-Bid join assertParty uses, exposed as a filter for the
+  // admin contractor-detail view.
+  if (contractorId) {
+    const theirBids = await Bid.find({ contractorId }).select('_id').lean();
+    filter.bidId = { $in: theirBids.map((b) => b._id) };
+  }
 
   const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
   if (!isAdmin) {
@@ -99,4 +107,36 @@ const terminate = catchAsync(async (req, res) => {
   return ok(res, contract);
 });
 
-module.exports = { getAll, getOne, markCompleted, terminate };
+/** Admin-only — contracts are normally system-generated when a bid is
+ * accepted; this exists for correcting/backfilling a real hire that
+ * predates that flow or was recorded elsewhere. */
+const adminCreate = catchAsync(async (req, res) => {
+  const { projectId, bidId } = req.body;
+  const [project, bid] = await Promise.all([
+    Project.findById(projectId).select('_id').lean(),
+    Bid.findById(bidId).select('projectId').lean(),
+  ]);
+  if (!project) throw ApiError.badRequest('No such project');
+  if (!bid) throw ApiError.badRequest('No such bid');
+  if (String(bid.projectId) !== String(projectId)) throw ApiError.badRequest('That bid was not placed on this project');
+
+  const contract = await Contract.create(req.body);
+  await logAdminAction({ adminId: req.user._id, action: 'contract.create', targetType: 'Contract', targetId: contract._id, detail: { projectId, bidId } });
+  return created(res, contract);
+});
+
+const adminUpdate = catchAsync(async (req, res) => {
+  const contract = await Contract.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+  if (!contract) throw ApiError.notFound('Contract not found');
+  await logAdminAction({ adminId: req.user._id, action: 'contract.update', targetType: 'Contract', targetId: contract._id, detail: { fields: Object.keys(req.body) } });
+  return ok(res, contract);
+});
+
+const adminRemove = catchAsync(async (req, res) => {
+  const contract = await Contract.findByIdAndDelete(req.params.id);
+  if (!contract) throw ApiError.notFound('Contract not found');
+  await logAdminAction({ adminId: req.user._id, action: 'contract.remove', targetType: 'Contract', targetId: req.params.id, detail: { projectId: contract.projectId } });
+  return res.status(204).send();
+});
+
+module.exports = { getAll, getOne, markCompleted, terminate, adminCreate, adminUpdate, adminRemove };

@@ -57,6 +57,20 @@ async function resolveUser({ authHeader, devUserId }) {
 
   const providers = parseAuthProviders(decoded);
   let user = await User.findOne({ firebaseUid: decoded.uid });
+  let justLinked = false;
+  if (!user && decoded.email) {
+    // An admin-created User (see adminUserController.create) has no
+    // firebaseUid yet, only an email — this is the one place that real
+    // person's first real sign-in gets linked to that existing record
+    // instead of JIT-provisioning a second, duplicate account below.
+    user = await User.findOne({ email: decoded.email, firebaseUid: { $in: [null, undefined] } });
+    if (user) {
+      user.firebaseUid = decoded.uid;
+      user.authProviders = providers;
+      await user.save();
+      justLinked = true;
+    }
+  }
   if (!user) {
     user = await User.create({
       fullName: decoded.name || 'New User',
@@ -65,7 +79,7 @@ async function resolveUser({ authHeader, devUserId }) {
       firebaseUid: decoded.uid,
       authProviders: providers,
     });
-  } else {
+  } else if (!justLinked) {
     // Keep the linked-provider list current — e.g. a user who signed up
     // with phone and later links Google in Settings keeps the same
     // firebaseUid, so this is the only place that picks the change up.
@@ -137,4 +151,31 @@ function requireRole(...roleTypes) {
   };
 }
 
-module.exports = { authenticate, requireRole, resolveUser };
+/**
+ * Fine-grained admin RBAC layered on top of requireRole('admin'). A `null`/
+ * absent User.adminPermissions means unrestricted — every existing admin
+ * (including the INITIAL_ADMIN_EMAIL bootstrap account) is unaffected until
+ * someone explicitly restricts them via POST /admin/admins/:id/permissions.
+ * Only applied to v2 admin routes per the plan — v1 endpoints are left
+ * alone to keep blast radius small.
+ */
+function requireAdminPermission(key) {
+  return (req, res, next) => {
+    const perms = req.user?.adminPermissions;
+    if (perms == null) return next(); // unrestricted
+    if (Array.isArray(perms) && perms.includes(key)) return next();
+    return next(ApiError.forbidden(`Requires admin permission: ${key}`));
+  };
+}
+
+/** Guards the permission-grant endpoint itself — only an unrestricted admin
+ * may grant/revoke permissions, on themselves or anyone else. A restricted
+ * admin can never escalate via this route, even targeting their own id. */
+function requireUnrestrictedAdmin(req, res, next) {
+  if (req.user?.adminPermissions != null) {
+    return next(ApiError.forbidden('Only an unrestricted admin can manage admin permissions'));
+  }
+  next();
+}
+
+module.exports = { authenticate, requireRole, requireAdminPermission, requireUnrestrictedAdmin, resolveUser };

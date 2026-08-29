@@ -3,6 +3,7 @@ const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const notificationService = require('../services/notificationService');
+const { logAdminAction } = require('../services/adminActionLogService');
 
 const MULTIPLE_DISPUTES_THRESHOLD = 3;
 
@@ -114,6 +115,14 @@ const resolve = catchAsync(async (req, res) => {
       status: dispute.status,
     });
   }
+
+  await logAdminAction({
+    adminId: req.user._id,
+    action: 'dispute.resolve',
+    targetType: 'Dispute',
+    targetId: dispute._id,
+    detail: { status: dispute.status, projectId: dispute.projectId },
+  });
 
   return ok(res, dispute);
 });

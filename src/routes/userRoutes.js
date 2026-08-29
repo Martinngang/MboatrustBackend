@@ -4,7 +4,7 @@ const userController = require('../controllers/userController');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const upload = require('../middleware/upload');
-const { updateProfile, addRole, linkAuthProvider, deleteMyAccount } = require('../validators/userValidators');
+const { updateProfile, addRole, linkAuthProvider, deleteMyAccount, addPayoutMethod } = require('../validators/userValidators');
 
 const router = Router();
 
@@ -15,6 +15,9 @@ router.post('/me/auth-providers', authenticate, validate(linkAuthProvider), user
 router.post('/me/avatar', authenticate, upload.single('file'), userController.uploadAvatar);
 router.post('/me/documents', authenticate, upload.single('file'), userController.uploadDocument);
 router.post('/me/device-token', authenticate, validate(z.object({ token: z.string().min(1) })), userController.setDeviceToken);
+router.post('/me/payout-methods', authenticate, validate(addPayoutMethod), userController.addPayoutMethod);
+router.delete('/me/payout-methods/:methodId', authenticate, userController.removePayoutMethod);
+router.patch('/me/payout-methods/:methodId/default', authenticate, userController.setDefaultPayoutMethod);
 router.get('/me/export', authenticate, userController.exportMyData);
 router.post('/me/sessions/revoke', authenticate, userController.revokeSessions);
 router.patch('/me/deactivate', authenticate, userController.deactivateMe);

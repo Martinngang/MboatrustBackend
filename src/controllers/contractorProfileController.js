@@ -1,62 +1,36 @@
-const mongoose = require('mongoose');
-const { ContractorProfile, Bid, Rating, Escrow, User } = require('../models');
+const { ContractorProfile, Bid, User, Escrow, Contract } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
+const { logAdminAction } = require('../services/adminActionLogService');
+const storageService = require('../services/storageService');
+const { getStats } = require('../services/contractorStatsService');
+const { getLeaderboard: computeLeaderboard } = require('../services/contractorLeaderboardService');
 
 const EMPTY_PROFILE = {
   categories: [],
   regions: [],
   location: { lat: null, lng: null },
   bio: '',
+  headline: '',
+  services: [],
+  portfolioImages: [],
   yearsExperience: 0,
   isAvailable: true,
 };
 
-/** Live stats — never denormalized onto ContractorProfile, always computed
- * fresh from Bid/Project/Rating so they can't drift out of sync. Every
- * ratio is guarded against a zero denominator (returns 0, never NaN/Infinity). */
-async function getStats(userId) {
-  const contractorId = new mongoose.Types.ObjectId(userId);
-
-  const [bidCounts, completionAgg, ratingAgg] = await Promise.all([
-    Bid.aggregate([
-      { $match: { contractorId } },
-      { $group: { _id: '$status', count: { $sum: 1 } } },
-    ]),
-    Bid.aggregate([
-      { $match: { contractorId, status: 'accepted' } },
-      {
-        $lookup: {
-          from: 'projects',
-          localField: 'projectId',
-          foreignField: '_id',
-          as: 'project',
-        },
-      },
-      { $unwind: '$project' },
-      {
-        $group: {
-          _id: null,
-          accepted: { $sum: 1 },
-          completed: { $sum: { $cond: [{ $eq: ['$project.status', 'completed'] }, 1, 0] } },
-        },
-      },
-    ]),
-    Rating.aggregate([
-      { $match: { toUserId: contractorId, roleContext: 'contractor' } },
-      { $group: { _id: null, average: { $avg: '$score' }, count: { $sum: 1 } } },
-    ]),
-  ]);
-
-  const totalBids = bidCounts.reduce((sum, b) => sum + b.count, 0);
-  const acceptedBids = bidCounts.find((b) => b._id === 'accepted')?.count || 0;
-  const completedProjects = completionAgg[0]?.completed || 0;
-  const completionRate = acceptedBids > 0 ? completedProjects / acceptedBids : 0;
-  const avgRating = ratingAgg[0]?.average ?? null;
-  const ratingCount = ratingAgg[0]?.count || 0;
-
-  return { completedProjects, totalBids, acceptedBids, completionRate, avgRating, ratingCount };
+/** Backfills any field a document is missing (via .lean(), or via a $set
+ * update that never touched a field a schema addition introduced *after*
+ * that document was created — Mongoose's schema defaults only apply on
+ * document construction, never retroactively on read or on an update that
+ * doesn't mention the field) with EMPTY_PROFILE's default, without
+ * clobbering any real value the document does have. Every place this
+ * controller hands a profile object to the frontend goes through this —
+ * skipping it for even one is exactly how ContractorProfileScreen's edit
+ * form crashed on `services.length` for every contractor profile created
+ * before `services`/`headline`/`portfolioImages` existed on the schema. */
+function withDefaults(profile) {
+  return { ...EMPTY_PROFILE, ...(profile || {}) };
 }
 
 /** Public marketplace directory — every User with the contractor role, left-
@@ -67,7 +41,7 @@ async function getStats(userId) {
  * opposite order would silently return short/empty pages once a filter
  * excludes any user in the current page's slice. */
 const getAll = catchAsync(async (req, res) => {
-  const { page = 1, limit = 20, category, region, isAvailable } = req.query;
+  const { page = 1, limit = 20, category, region, isAvailable, search } = req.query;
   const filtering = Boolean(category || region || isAvailable !== undefined);
 
   const userFilter = { 'roles.roleType': 'contractor' };
@@ -78,6 +52,10 @@ const getAll = catchAsync(async (req, res) => {
     if (isAvailable !== undefined) profileFilter.isAvailable = isAvailable === 'true';
     const matching = await ContractorProfile.find(profileFilter).select('userId').lean();
     userFilter._id = { $in: matching.map((p) => p.userId) };
+  }
+  if (search) {
+    const escaped = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    userFilter.fullName = new RegExp(escaped, 'i');
   }
 
   const [users, total] = await Promise.all([
@@ -94,7 +72,7 @@ const getAll = catchAsync(async (req, res) => {
 
   const items = await Promise.all(
     users.map(async (u) => {
-      const profile = profileByUser.get(String(u._id)) || { userId: u._id, ...EMPTY_PROFILE };
+      const profile = withDefaults(profileByUser.get(String(u._id)));
       const stats = await getStats(u._id);
       return { ...profile, userId: u._id, fullName: u.fullName, avatarUrl: u.avatarUrl, kycStatus: u.kycStatus, stats };
     })
@@ -104,19 +82,34 @@ const getAll = catchAsync(async (req, res) => {
 
 const getMine = catchAsync(async (req, res) => {
   const profile = await ContractorProfile.findOne({ userId: req.user._id }).lean();
-  return ok(res, profile || { userId: req.user._id, ...EMPTY_PROFILE });
+  return ok(res, { ...withDefaults(profile), userId: req.user._id });
 });
 
 const upsertMine = catchAsync(async (req, res) => {
   const isContractor = req.user.roles?.some((r) => r.roleType === 'contractor');
   if (!isContractor) throw ApiError.forbidden('Requires role: contractor');
 
+  const { existingPortfolioImages, ...rest } = req.body;
+  const uploaded = req.files?.length
+    ? await Promise.all(req.files.map((f) => storageService.uploadBuffer(f.buffer, { folder: `mboatrust/contractor-portfolio/${req.user._id}` })))
+    : [];
+  const update = { ...rest };
+  if (existingPortfolioImages !== undefined || uploaded.length > 0) {
+    update.portfolioImages = [
+      ...(existingPortfolioImages ?? []),
+      ...uploaded.map((u) => ({ url: u.secure_url, caption: '' })),
+    ];
+  }
+
   const profile = await ContractorProfile.findOneAndUpdate(
     { userId: req.user._id },
-    { $set: req.body },
+    { $set: update },
     { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
   );
-  return ok(res, profile);
+  // $set only ever touches the fields this call actually sent — a profile
+  // created before headline/services/portfolioImages existed on the schema
+  // and never since edited through all three would still lack them here.
+  return ok(res, withDefaults(profile.toObject()));
 });
 
 const getEarnings = catchAsync(async (req, res) => {
@@ -179,11 +172,78 @@ const setAvailability = catchAsync(async (req, res) => {
 });
 
 const getPublic = catchAsync(async (req, res) => {
-  const [profile, stats] = await Promise.all([
+  const [user, profile, stats] = await Promise.all([
+    User.findById(req.params.userId).select('fullName avatarUrl kycStatus').lean(),
     ContractorProfile.findOne({ userId: req.params.userId }).lean(),
     getStats(req.params.userId),
   ]);
-  return ok(res, { ...(profile || { userId: req.params.userId, ...EMPTY_PROFILE }), stats });
+  if (!user) throw ApiError.notFound('Contractor not found');
+  return ok(res, {
+    ...withDefaults(profile),
+    userId: req.params.userId,
+    fullName: user.fullName,
+    avatarUrl: user.avatarUrl,
+    kycStatus: user.kycStatus,
+    stats,
+  });
 });
 
-module.exports = { getAll, getMine, upsertMine, getPublic, getStats, getEarnings, setAvailability };
+/** Real platform work only — resolved live via Bid→Contract (Contract has no
+ * direct contractorId field), never denormalized onto ContractorProfile,
+ * same "always computed fresh" rule getStats follows. Deliberately public-
+ * safe: only what a funder evaluating this contractor should see (project
+ * title/category/region, when it wrapped up) — never the contract's
+ * generatedDocumentText or totalAmount, which contractController.getAll's
+ * own party-only scoping keeps private between the two real parties. */
+const getCompletedWork = catchAsync(async (req, res) => {
+  const bids = await Bid.find({ contractorId: req.params.userId, status: 'accepted' }).select('_id').lean();
+  const contracts = await Contract.find({ bidId: { $in: bids.map((b) => b._id) }, status: 'completed' })
+    .populate('projectId', 'title category locationName')
+    .sort('-updatedAt')
+    .limit(20)
+    .lean();
+
+  const items = contracts
+    .filter((c) => c.projectId)
+    .map((c) => ({
+      id: c._id,
+      projectTitle: c.projectId.title,
+      category: c.projectId.category,
+      location: c.projectId.locationName,
+      completedAt: c.updatedAt,
+    }));
+  return ok(res, items);
+});
+
+/** Public ranking — every contractor role-holder, scored and sorted by the
+ * same "weighted 0-100, auditable breakdown" convention
+ * contractorMatchingService uses for per-tender matching. Unlike that
+ * service, this has no project to match against, so the dimensions are the
+ * project-independent metrics the leaderboard was actually asked for:
+ * completed projects, ratings, reliability, and verified experience. See
+ * services/contractorLeaderboardService.js. */
+const getLeaderboard = catchAsync(async (req, res) => {
+  const { page = 1, limit = 20, search, category, region, verified } = req.query;
+  const result = await computeLeaderboard({
+    search, category, region,
+    verified: verified === undefined ? undefined : verified === 'true',
+    page: Number(page), limit: Number(limit),
+  });
+  return ok(res, result.items, { page: Number(page), limit: Number(limit), total: result.total });
+});
+
+/** Admin-only edit of any contractor's profile — same upsert shape as
+ * upsertMine, parametrized by req.params.userId instead of req.user._id,
+ * skipping the self-service isContractor check (an admin can correct a
+ * profile regardless of the target's current role state). */
+const adminUpsert = catchAsync(async (req, res) => {
+  const profile = await ContractorProfile.findOneAndUpdate(
+    { userId: req.params.userId },
+    { $set: req.body, $setOnInsert: { userId: req.params.userId } },
+    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+  );
+  await logAdminAction({ adminId: req.user._id, action: 'contractorProfile.adminUpdate', targetType: 'ContractorProfile', targetId: profile._id, detail: { userId: req.params.userId, fields: Object.keys(req.body) } });
+  return ok(res, withDefaults(profile.toObject()));
+});
+
+module.exports = { getAll, getMine, upsertMine, adminUpsert, getPublic, getStats, getEarnings, setAvailability, getCompletedWork, getLeaderboard };

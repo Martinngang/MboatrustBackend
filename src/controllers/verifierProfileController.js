@@ -3,6 +3,7 @@ const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const storageService = require('../services/storageService');
+const { logAdminAction } = require('../services/adminActionLogService');
 
 const getMine = catchAsync(async (req, res) => {
   const profile = await VerifierProfile.findOne({ userId: req.user._id });
@@ -78,6 +79,8 @@ const approve = catchAsync(async (req, res) => {
     await user.save();
   }
 
+  await logAdminAction({ adminId: req.user._id, action: 'verifierProfile.approve', targetType: 'VerifierProfile', targetId: profile._id, detail: { userId: profile.userId } });
+
   return ok(res, profile);
 });
 
@@ -88,7 +91,24 @@ const reject = catchAsync(async (req, res) => {
   profile.reviewedBy = req.user._id;
   profile.reviewedAt = new Date();
   await profile.save();
+  await logAdminAction({ adminId: req.user._id, action: 'verifierProfile.reject', targetType: 'VerifierProfile', targetId: profile._id, detail: { userId: profile.userId } });
   return ok(res, profile);
 });
 
-module.exports = { getMine, upsertMine, getAll, approve, reject };
+/** Admin-only edit of any verifier's profile fields — unlike upsertMine,
+ * never touches applicationStatus (that's approve/reject's job only), so
+ * an admin correcting a typo doesn't accidentally reset a reviewed
+ * application back to pending. */
+const adminUpdate = catchAsync(async (req, res) => {
+  const { applicationStatus, reviewedBy, reviewedAt, ...safeFields } = req.body;
+  const profile = await VerifierProfile.findOneAndUpdate(
+    { userId: req.params.userId },
+    { $set: safeFields },
+    { new: true, runValidators: true }
+  );
+  if (!profile) throw ApiError.notFound('Verifier profile not found');
+  await logAdminAction({ adminId: req.user._id, action: 'verifierProfile.adminUpdate', targetType: 'VerifierProfile', targetId: profile._id, detail: { userId: req.params.userId, fields: Object.keys(safeFields) } });
+  return ok(res, profile);
+});
+
+module.exports = { getMine, upsertMine, getAll, approve, reject, adminUpdate };

@@ -3,6 +3,7 @@ const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const paymentService = require('../services/paymentService');
+const { logAdminAction } = require('../services/adminActionLogService');
 
 // Flat prices, not run through feeService.calculateFee — that service
 // deducts a fee FROM a gross amount for money already moving through the
@@ -18,6 +19,20 @@ const RENEWAL_INTERVAL_DAYS = 30;
 const getMine = catchAsync(async (req, res) => {
   const subscriptions = await Subscription.find({ userId: req.user._id }).sort('-createdAt');
   return ok(res, subscriptions);
+});
+
+/** Admin-only — every subscription platform-wide. */
+const getAll = catchAsync(async (req, res) => {
+  const { page = 1, limit = 20, status, planType } = req.query;
+  const filter = {};
+  if (status) filter.status = status;
+  if (planType) filter.planType = planType;
+
+  const [items, total] = await Promise.all([
+    Subscription.find(filter).populate('userId', 'fullName').sort('-createdAt').skip((page - 1) * limit).limit(Number(limit)),
+    Subscription.countDocuments(filter),
+  ]);
+  return ok(res, items, { page: Number(page), limit: Number(limit), total });
 });
 
 /** Routes the first charge through the exact same payment-provider
@@ -53,13 +68,14 @@ const create = catchAsync(async (req, res) => {
 });
 
 const cancel = catchAsync(async (req, res) => {
-  const subscription = await Subscription.findOneAndUpdate(
-    { _id: req.params.id, userId: req.user._id },
-    { status: 'cancelled' },
-    { new: true }
-  );
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  const filter = isAdmin ? { _id: req.params.id } : { _id: req.params.id, userId: req.user._id };
+  const subscription = await Subscription.findOneAndUpdate(filter, { status: 'cancelled' }, { new: true });
   if (!subscription) throw ApiError.notFound('Subscription not found');
+  if (isAdmin && String(subscription.userId) !== String(req.user._id)) {
+    await logAdminAction({ adminId: req.user._id, action: 'subscription.forceCancel', targetType: 'Subscription', targetId: subscription._id, detail: { userId: subscription.userId } });
+  }
   return ok(res, subscription);
 });
 
-module.exports = { getMine, create, cancel, PLAN_PRICES, RENEWAL_INTERVAL_DAYS };
+module.exports = { getMine, getAll, create, cancel, PLAN_PRICES, RENEWAL_INTERVAL_DAYS };

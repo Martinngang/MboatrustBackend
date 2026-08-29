@@ -12,12 +12,25 @@ const RoleEntrySchema = new Schema(
   {
     roleType: {
       type: String,
-      enum: ['funder', 'recipient', 'contractor', 'land_seller', 'verifier', 'admin'],
+      enum: ['funder', 'recipient', 'contractor', 'land_seller', 'verifier', 'admin', 'quincaillerie'],
       required: true,
     },
     profileRef: { type: Schema.Types.ObjectId, default: null },
   },
   { _id: false }
+);
+
+// Saved payout destinations — recipients, contractors, and sellers store their
+// MoMo/OM phone numbers here so withdrawals and milestone releases can be
+// routed to the right account without re-entering details each time.
+const PayoutMethodSchema = new Schema(
+  {
+    label: { type: String, default: '' },
+    provider: { type: String, enum: ['mtn_momo', 'orange_money'], required: true },
+    phoneNumber: { type: String, required: true },
+    isDefault: { type: Boolean, default: false },
+  },
+  { _id: true }
 );
 
 const UserSchema = new Schema(
@@ -61,6 +74,7 @@ const UserSchema = new Schema(
     // enum here since the dataset is too large to mirror server-side.
     residenceCountry: { type: String, default: '' },
     residenceCity: { type: String, default: '' },
+    payoutMethods: { type: [PayoutMethodSchema], default: [] },
     avatarUrl: { type: String, default: null },
     isActive: { type: Boolean, default: true },
     // Firebase Cloud Messaging token for the device currently signed in —
@@ -69,6 +83,14 @@ const UserSchema = new Schema(
     // the scope this backend needs; a real multi-device inbox would need a
     // token-per-device list instead.
     fcmDeviceToken: { type: String, default: null },
+    // Fine-grained admin RBAC, additive on top of the flat roleType:'admin'
+    // check — absent/null means unrestricted (every admin created before
+    // this field existed, including the INITIAL_ADMIN_EMAIL bootstrap
+    // account, keeps full access with zero migration). Only meaningful for
+    // users with an 'admin' role entry; see middleware/auth.js's
+    // requireAdminPermission. Keys mirror ADMIN_NAV's section keys on the
+    // frontend (components/shell/adminNav.ts).
+    adminPermissions: { type: [String], default: null },
   },
   { timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' } }
 );

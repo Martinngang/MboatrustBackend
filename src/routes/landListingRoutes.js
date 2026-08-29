@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const landListingController = require('../controllers/landListingController');
-const { authenticate, requireRole } = require('../middleware/auth');
+const { authenticate, requireRole, requireAdminPermission } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const upload = require('../middleware/upload');
 const idempotent = require('../middleware/idempotency');
@@ -35,5 +35,7 @@ router.patch(
   validate(updateVerificationStatus),
   landListingController.updateVerificationStatus
 );
+router.get('/:id/offers', authenticate, requireRole('admin'), requireAdminPermission('land'), landListingController.getOffersForListing);
+router.get('/:id/visit-requests', authenticate, requireRole('admin'), requireAdminPermission('land'), landListingController.getVisitRequestsForListing);
 
 module.exports = router;

@@ -1,11 +1,14 @@
 const { Router } = require('express');
 const groupController = require('../controllers/groupController');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireRole, requireAdminPermission } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { createGroup, inviteMember } = require('../validators/groupValidators');
 
 const router = Router();
 
+router.get('/', authenticate, requireRole('admin'), requireAdminPermission('community'), groupController.getAll);
+router.patch('/:id', authenticate, requireRole('admin'), requireAdminPermission('community'), groupController.update);
+router.delete('/:id', authenticate, requireRole('admin'), requireAdminPermission('community'), groupController.remove);
 router.get('/mine', authenticate, groupController.getMine);
 router.get('/:id', authenticate, groupController.getOne);
 router.get('/:id/dashboard', authenticate, groupController.getDashboard);

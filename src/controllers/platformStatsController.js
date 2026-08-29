@@ -7,6 +7,24 @@ function startOfCurrentMonth() {
   return new Date(now.getFullYear(), now.getMonth(), 1);
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const TREND_DAYS = 30;
+
+/** Turns a sparse `[{_id: 'YYYY-MM-DD', ...}]` aggregation result into a
+ * dense day-by-day array covering the last `days` days (including today),
+ * filling gaps with 0 — so a line/area chart never has to special-case
+ * missing days itself. */
+function fillDailySeries(days, aggRows, valueKey) {
+  const byDate = new Map(aggRows.map((r) => [r._id, r[valueKey]]));
+  const out = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(Date.now() - i * DAY_MS);
+    const key = d.toISOString().slice(0, 10);
+    out.push({ date: key, value: byDate.get(key) || 0 });
+  }
+  return out;
+}
+
 /** Real aggregations over existing collections — no new tracking needed.
  * Reuses the same "sum completed Escrows by type" approach
  * projectController.getFundingSummaryData uses per-project, just without
@@ -14,8 +32,12 @@ function startOfCurrentMonth() {
 const getPlatformStats = catchAsync(async (req, res) => {
   const since = req.query.since ? new Date(req.query.since) : startOfCurrentMonth();
 
-  const [totalUsers, usersByRoleAgg, activeProjects, escrowByType, openDisputes, completedProjectsThisPeriod] =
-    await Promise.all([
+  const trendSince = new Date(Date.now() - TREND_DAYS * DAY_MS);
+
+  const [
+    totalUsers, usersByRoleAgg, activeProjects, escrowByType, openDisputes, completedProjectsThisPeriod,
+    newUsersByDayAgg, escrowVolumeByDayAgg,
+  ] = await Promise.all([
       User.countDocuments({}),
       User.aggregate([
         { $unwind: '$roles' },
@@ -28,6 +50,17 @@ const getPlatformStats = catchAsync(async (req, res) => {
       ]),
       Dispute.countDocuments({ status: 'open' }),
       Project.countDocuments({ status: 'completed', updatedAt: { $gte: since } }),
+      // Overview trend charts — last 30 days, day-by-day. Kept as separate,
+      // narrowly-matched aggregations (not reused from the two above) so
+      // this endpoint's existing snapshot fields are untouched either way.
+      User.aggregate([
+        { $match: { createdAt: { $gte: trendSince } } },
+        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, count: { $sum: 1 } } },
+      ]),
+      Escrow.aggregate([
+        { $match: { type: 'fund', status: 'completed', createdAt: { $gte: trendSince } } },
+        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, total: { $sum: '$netAmount' } } },
+      ]),
     ]);
 
   const usersByRole = Object.fromEntries(usersByRoleAgg.map((r) => [r._id, r.count]));
@@ -42,6 +75,12 @@ const getPlatformStats = catchAsync(async (req, res) => {
     openDisputes,
     completedProjectsThisPeriod,
     since,
+    // Additive — existing consumers of this endpoint that don't know about
+    // these fields are unaffected.
+    trends: {
+      newUsersByDay: fillDailySeries(TREND_DAYS, newUsersByDayAgg, 'count'),
+      escrowVolumeByDay: fillDailySeries(TREND_DAYS, escrowVolumeByDayAgg, 'total'),
+    },
   });
 });
 

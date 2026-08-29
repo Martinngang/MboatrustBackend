@@ -27,9 +27,37 @@ const createProject = z.object({
   currency: z.enum(['USD', 'EUR', 'GBP', 'XAF']).optional().default('XAF'),
   requiresMultiSig: z.boolean().optional().default(false),
   milestones: z.array(milestoneInput).optional().default([]),
+  // Materials-managed-by is deliberately NOT set here — a project always
+  // starts 'contractor'-managed (the Project schema default) and only ever
+  // becomes quincaillerie-managed via POST /projects/:id/assign-quincaillerie,
+  // once the funder has actually browsed/compared real stores. Forcing a
+  // store pick into the creation form (an earlier version of this) skipped
+  // that comparison step entirely.
 });
 
-const updateProject = createProject.partial();
+const updateProject = z.object({
+  projectType: z.enum(['funding', 'tender', 'land_purchase']).optional(),
+  title: z.string().min(1).optional(),
+  description: z.string().optional(),
+  category: z.string().optional(),
+  locationName: z.string().optional(),
+  location: geoPoint.optional(),
+  imageUrl: z.string().optional(),
+  deadline: z.coerce.date().optional(),
+  totalAmount: z.number().min(0).optional(),
+  currency: z.enum(['USD', 'EUR', 'GBP', 'XAF']).optional(),
+  requiresMultiSig: z.boolean().optional(),
+  milestones: z.array(milestoneInput).optional(),
+});
+
+// Dedicated endpoint rather than folded into updateProject — assigning a
+// supplier is pure routing metadata (unlike totalAmount/milestones, it can
+// never desync an escrow ledger), so it must stay legal at any project
+// status, not just while still 'draft'/'open' like the generic update.
+// `quincaillerieId: null` unassigns, reverting to 'contractor'-managed.
+const assignQuincaillerie = z.object({
+  quincaillerieId: z.string().nullable(),
+});
 
 const fundProject = z.object({
   amount: z.number().positive(),
@@ -48,6 +76,12 @@ const submitEvidence = z.object({
   // GPS tag (common for browser file-input uploads, which often strip it).
   geotagLat: z.coerce.number().min(-90).max(90).optional(),
   geotagLng: z.coerce.number().min(-180).max(180).optional(),
+  // Already resolved client-side the moment the GPS fix came in (see
+  // MilestoneSubmitScreen's useReverseGeocodeQuery) — without this in the
+  // schema, the validator silently stripped it from req.body before the
+  // controller ever saw it, so every submission fell through to the
+  // server-side re-geocode fallback regardless of what the client sent.
+  placeName: z.string().max(500).optional(),
   fileHash: z.string().optional(),
 });
 
@@ -55,4 +89,8 @@ const decideApproval = z.object({
   status: z.enum(['approved', 'rejected']),
 });
 
-module.exports = { createProject, updateProject, fundProject, submitEvidence, decideApproval };
+const requestChanges = z.object({
+  reason: z.string().min(1),
+});
+
+module.exports = { createProject, updateProject, assignQuincaillerie, fundProject, submitEvidence, decideApproval, requestChanges };

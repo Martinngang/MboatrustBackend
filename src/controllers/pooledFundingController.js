@@ -161,12 +161,31 @@ const resumeRecurring = catchAsync(async (req, res) => {
   return ok(res, contribution);
 });
 
+// Unlike every sibling list endpoint in this codebase (escrows, bids,
+// land-offers, contracts, visit-requests all restrict a non-admin caller to
+// parties they actually belong to), this one built its filter straight from
+// req.query with no ownership check at all — any authenticated user could
+// pass ?contributorId=<anyone> or ?projectId=<anyProject> and read other
+// users' pledge amounts and recurrence schedules. Scoped the same way those
+// siblings are: a non-admin only ever sees contributions they themselves
+// pledged, or ones on a project they own (so an inviting funder can see the
+// co-funder's pledge status).
+const isAdminUser = (user) => user.roles?.some((r) => r.roleType === 'admin');
+
 const getAll = catchAsync(async (req, res) => {
   const { projectId, contributorId, status } = req.query;
   const filter = {};
   if (projectId) filter.projectId = projectId;
   if (contributorId) filter.contributorId = contributorId;
   if (status) filter.status = status;
+
+  if (!isAdminUser(req.user)) {
+    const myProjects = await Project.find({ ownerId: req.user._id }).select('_id').lean();
+    Object.assign(filter, {
+      $or: [{ contributorId: req.user._id }, { projectId: { $in: myProjects.map((p) => p._id) } }],
+    });
+  }
+
   const items = await PooledContribution.find(filter)
     .populate('contributorId', 'fullName')
     .populate('projectId', 'title')

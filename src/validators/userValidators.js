@@ -23,10 +23,13 @@ const addRole = z.object({
 });
 
 // Admin-only counterpart to addRole — the full role set, since an admin may
-// legitimately grant any of them (including promoting another admin or
-// approving a vetted verifier application).
+// legitimately grant any of them (including promoting another admin,
+// approving a vetted verifier application, or approving a quincaillerie
+// registration — see quincaillerieProfileController.approve for the atomic
+// review-approval path onto 'quincaillerie'; this endpoint is the manual
+// admin-drawer path onto the same role).
 const adminGrantRole = z.object({
-  roleType: z.enum(['funder', 'recipient', 'contractor', 'land_seller', 'verifier', 'admin']),
+  roleType: z.enum(['funder', 'recipient', 'contractor', 'land_seller', 'verifier', 'admin', 'quincaillerie']),
 });
 
 const linkAuthProvider = z.object({
@@ -43,4 +46,45 @@ const deleteMyAccount = z.object({
   confirm: z.literal('DELETE'),
 });
 
-module.exports = { updateProfile, addRole, adminGrantRole, linkAuthProvider, deleteMyAccount };
+// Admin-created account — no firebaseUid yet (the real person links it on
+// their first actual sign-in, see middleware/auth.js's resolveUser). roles
+// accepts the full enum, same as adminGrantRole, since an admin creating an
+// account may need it pre-seeded with a role (e.g. onboarding a verifier
+// hired outside the self-signup flow).
+const adminCreateUser = z.object({
+  fullName: z.string().min(1),
+  email: z.string().email().optional(),
+  phoneNumber: z.string().min(1).optional(),
+  roles: z.array(z.enum(['funder', 'recipient', 'contractor', 'land_seller', 'verifier', 'admin', 'quincaillerie'])).optional(),
+});
+
+// Deliberately excludes roles/passwordHash/firebaseUid/authProviders/
+// isActive — roles go through grantRole/revokeRole, isActive through
+// deactivate/reactivate, and the auth fields would sever/hijack Firebase
+// identity linkage if raw-edited. This is a strict allowlist, never a raw
+// passthrough onto a User document.
+const adminUpdateUser = z.object({
+  fullName: z.string().min(1).optional(),
+  email: z.string().email().optional(),
+  phoneNumber: z.string().min(1).optional(),
+  kycStatus: z.enum(['unverified', 'pending', 'verified', 'rejected']).optional(),
+  kycLevel: z.enum(['basic', 'enhanced']).optional(),
+  preferredLanguage: z.enum(['en', 'fr']).optional(),
+  residenceCountry: z.string().regex(/^[A-Z]{2}$/).optional(),
+  residenceCity: z.string().min(1).optional(),
+  avatarUrl: z.string().url().optional(),
+});
+
+// TEMPORARY — see userController.adminChangePassword's comment.
+const adminChangePassword = z.object({
+  // Firebase's own minimum for a password set via the Admin SDK.
+  newPassword: z.string().min(6),
+});
+
+const addPayoutMethod = z.object({
+  label: z.string().max(50).default(''),
+  provider: z.enum(['mtn_momo', 'orange_money']),
+  phoneNumber: z.string().min(9).max(15),
+});
+
+module.exports = { updateProfile, addRole, adminGrantRole, linkAuthProvider, deleteMyAccount, adminCreateUser, adminUpdateUser, adminChangePassword, addPayoutMethod };

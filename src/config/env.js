@@ -31,6 +31,15 @@ module.exports = {
   },
   devAuthBypass: process.env.DEV_AUTH_BYPASS === 'true',
 
+  // Granting 'admin' requires an existing admin (see adminUserRoutes.js) —
+  // with zero admins, nobody could ever reach that endpoint, so a fresh
+  // production database has no path to its first one. Set this once, to
+  // the email of a real account that has already signed up, and
+  // bootstrapAdmin.js grants it admin on the next server start; leaving it
+  // set afterward is a harmless no-op (see that file). Never used to create
+  // an account — only to promote one that already exists.
+  initialAdminEmail: (process.env.INITIAL_ADMIN_EMAIL || '').trim().toLowerCase(),
+
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
     apiKey: process.env.CLOUDINARY_API_KEY || '',
@@ -46,6 +55,11 @@ module.exports = {
     disbursementSubscriptionKey: process.env.MOMO_DISBURSEMENT_SUBSCRIPTION_KEY || process.env.MOMO_SUBSCRIPTION_KEY || '',
     apiUser: process.env.MOMO_API_USER || '',
     apiKey: process.env.MOMO_API_KEY || '',
+    // Was hardcoded to 'sandbox' directly in mtnMomoProvider's request
+    // headers with no way to switch it — meant "enabling for production"
+    // was impossible without a code change. Defaults to sandbox so nothing
+    // changes until this is explicitly set.
+    targetEnvironment: process.env.MOMO_ENV === 'production' ? 'production' : 'sandbox',
   },
   orangeMoney: {
     baseUrl: process.env.OM_SANDBOX_BASE_URL || 'https://api.orange.com/orange-money-webpay/dev/v1',
