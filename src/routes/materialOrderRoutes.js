@@ -13,7 +13,7 @@ const router = Router();
 
 router.post('/', authenticate, validate(createMaterialOrder), controller.create);
 router.get('/mine', authenticate, controller.getMine);
-router.get('/for-quincaillerie', authenticate, controller.getForMyQuincaillerie);
+router.get('/for-supplier', authenticate, controller.getForMySupplier);
 router.get('/projects/:projectId/milestones/:milestoneId', authenticate, controller.getForMilestone);
 router.post('/:id/confirm', authenticate, validate(confirmMaterialOrder), controller.confirm);
 router.post('/:id/reject', authenticate, validate(rejectMaterialOrder), controller.reject);

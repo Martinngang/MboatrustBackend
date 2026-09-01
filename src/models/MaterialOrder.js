@@ -14,11 +14,11 @@ const MaterialOrderItemSchema = new Schema(
 );
 
 /** A funder's or contractor's request for materials on a specific project
- * milestone, fulfilled by a specific quincaillerie — the real backend for
- * what used to be materials.tsx's local-only MaterialOrder mock. Links four
- * real relationships in one document: the project, the exact milestone
- * within it, the fulfilling QuincaillerieProfile, and the User who asked
- * for it — every one of them a real ObjectId ref, not a display string. */
+ * milestone, fulfilled by a specific supplier — the real backend for what
+ * used to be materials.tsx's local-only MaterialOrder mock. Links four real
+ * relationships in one document: the project, the exact milestone within
+ * it, the fulfilling SupplierProfile, and the User who asked for it — every
+ * one of them a real ObjectId ref, not a display string. */
 const MaterialOrderSchema = new Schema(
   {
     projectId: { type: Schema.Types.ObjectId, ref: 'Project', required: true },
@@ -26,7 +26,7 @@ const MaterialOrderSchema = new Schema(
     // collection — this is that subdocument's _id, resolved/validated
     // against the parent Project in the controller, not a separate ref.
     milestoneId: { type: Schema.Types.ObjectId, required: true },
-    quincaillerieId: { type: Schema.Types.ObjectId, ref: 'QuincaillerieProfile', required: true },
+    supplierId: { type: Schema.Types.ObjectId, ref: 'SupplierProfile', required: true },
     requestedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     items: { type: [MaterialOrderItemSchema], default: [] },
     totalAmount: { type: Number, required: true, min: 0 },
@@ -55,7 +55,7 @@ const MaterialOrderSchema = new Schema(
 );
 
 MaterialOrderSchema.index({ milestoneId: 1 });
-MaterialOrderSchema.index({ quincaillerieId: 1, status: 1 });
+MaterialOrderSchema.index({ supplierId: 1, status: 1 });
 MaterialOrderSchema.index({ projectId: 1 });
 
 module.exports = model('MaterialOrder', MaterialOrderSchema);

@@ -9,7 +9,7 @@ const RatingSchema = new Schema(
     comment: { type: String, default: '' },
     roleContext: {
       type: String,
-      enum: ['recipient', 'contractor', 'verifier', 'land_seller', 'quincaillerie'],
+      enum: ['contractor', 'verifier', 'land_seller', 'supplier'],
       required: true,
     },
   },

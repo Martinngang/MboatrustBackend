@@ -1,8 +1,8 @@
 const { Router } = require('express');
-const controller = require('../controllers/quincaillerieProfileController');
+const controller = require('../controllers/supplierProfileController');
 const { authenticate, requireRole } = require('../middleware/auth');
 const validate = require('../middleware/validate');
-const { upsertMine } = require('../validators/quincaillerieProfileValidators');
+const { upsertMine } = require('../validators/supplierProfileValidators');
 
 const router = Router();
 

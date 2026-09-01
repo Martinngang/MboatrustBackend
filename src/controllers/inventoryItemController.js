@@ -1,27 +1,27 @@
-const { InventoryItem, QuincaillerieProfile } = require('../models');
+const { InventoryItem, SupplierProfile } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const storageService = require('../services/storageService');
 
-async function requireMyQuincaillerieId(userId) {
-  const profile = await QuincaillerieProfile.findOne({ ownerId: userId }).select('_id');
-  if (!profile) throw ApiError.badRequest('Register a quincaillerie before managing inventory');
+async function requireMySupplierId(userId) {
+  const profile = await SupplierProfile.findOne({ ownerId: userId }).select('_id');
+  if (!profile) throw ApiError.badRequest('Register as a supplier before managing inventory');
   return profile._id;
 }
 
 /** Owner-only, any item — used by every mutating action below to make sure
- * one quincaillerie can never read/edit/delete another's product. */
+ * one supplier can never read/edit/delete another's product. */
 async function loadOwnedItem(itemId, userId) {
   const item = await InventoryItem.findById(itemId);
   if (!item) throw ApiError.notFound('Inventory item not found');
-  const myQuincaillerieId = await requireMyQuincaillerieId(userId);
-  if (!item.quincaillerieId.equals(myQuincaillerieId)) throw ApiError.forbidden('Not your inventory item');
+  const mySupplierId = await requireMySupplierId(userId);
+  if (!item.supplierId.equals(mySupplierId)) throw ApiError.forbidden('Not your inventory item');
   return item;
 }
 
-function buildFilter({ quincaillerieId, search, category, subcategory, status, lowStockOnly }) {
-  const filter = { quincaillerieId };
+function buildFilter({ supplierId, search, category, subcategory, status, lowStockOnly }) {
+  const filter = { supplierId };
   if (status && status !== 'all') filter.status = status;
   if (category) filter.category = category;
   if (subcategory) filter.subcategory = subcategory;
@@ -48,11 +48,11 @@ function withLowStockFlag(doc) {
 }
 
 /** Owner's own full catalogue — every status, filterable/searchable/
- * sortable/paginated. The only place a quincaillerie manages its products. */
+ * sortable/paginated. The only place a supplier manages its products. */
 const getMine = catchAsync(async (req, res) => {
-  const myQuincaillerieId = await requireMyQuincaillerieId(req.user._id);
+  const mySupplierId = await requireMySupplierId(req.user._id);
   const { page = 1, limit = 24, search, category, subcategory, status, lowStockOnly, sortBy, sortDir } = req.query;
-  const filter = buildFilter({ quincaillerieId: myQuincaillerieId, search, category, subcategory, status, lowStockOnly });
+  const filter = buildFilter({ supplierId: mySupplierId, search, category, subcategory, status, lowStockOnly });
 
   const [items, total] = await Promise.all([
     InventoryItem.find(filter)
@@ -64,12 +64,12 @@ const getMine = catchAsync(async (req, res) => {
   return ok(res, items.map(withLowStockFlag), { page: Number(page), limit: Number(limit), total });
 });
 
-/** Authenticated (any role), active-only — a funder/recipient/contractor
- * browsing a specific store's catalogue to request materials on a
- * milestone. Never exposes archived items outside the owner's own view. */
-const getByQuincaillerie = catchAsync(async (req, res) => {
+/** Authenticated (any role), active-only — a funder/contractor browsing a
+ * specific store's catalogue to request materials on a milestone. Never
+ * exposes archived items outside the owner's own view. */
+const getBySupplier = catchAsync(async (req, res) => {
   const { page = 1, limit = 48, search, category, subcategory, sortBy, sortDir } = req.query;
-  const filter = buildFilter({ quincaillerieId: req.params.quincaillerieId, search, category, subcategory, status: 'active' });
+  const filter = buildFilter({ supplierId: req.params.supplierId, search, category, subcategory, status: 'active' });
 
   const [items, total] = await Promise.all([
     InventoryItem.find(filter)
@@ -81,9 +81,9 @@ const getByQuincaillerie = catchAsync(async (req, res) => {
   return ok(res, items.map(withLowStockFlag), { page: Number(page), limit: Number(limit), total });
 });
 
-/** Every active item across every quincaillerie, platform-wide — feeds the
+/** Every active item across every supplier, platform-wide — feeds the
  * Material Cost Estimator's live-pricing comparison (cross-referenced with
- * the quincaillerie directory for region/verification client-side). No
+ * the supplier directory for region/verification client-side). No
  * pagination: this is a lightweight aggregate read, not a browsing UI. */
 const getPublicActive = catchAsync(async (_req, res) => {
   const items = await InventoryItem.find({ status: 'active' }).limit(2000);
@@ -96,15 +96,15 @@ const getOne = catchAsync(async (req, res) => {
 });
 
 const create = catchAsync(async (req, res) => {
-  const myQuincaillerieId = await requireMyQuincaillerieId(req.user._id);
+  const mySupplierId = await requireMySupplierId(req.user._id);
   const existingImages = req.body.existingImages ?? [];
   const uploaded = req.files?.length
-    ? await Promise.all(req.files.map((f) => storageService.uploadBuffer(f.buffer, { folder: `mboatrust/inventory/${myQuincaillerieId}` })))
+    ? await Promise.all(req.files.map((f) => storageService.uploadBuffer(f.buffer, { folder: `mboatrust/inventory/${mySupplierId}` })))
     : [];
   const { existingImages: _drop, ...rest } = req.body;
   const item = await InventoryItem.create({
     ...rest,
-    quincaillerieId: myQuincaillerieId,
+    supplierId: mySupplierId,
     images: [...existingImages, ...uploaded.map((u) => u.secure_url)],
   });
   return created(res, withLowStockFlag(item));
@@ -114,7 +114,7 @@ const update = catchAsync(async (req, res) => {
   const item = await loadOwnedItem(req.params.id, req.user._id);
   const existingImages = req.body.existingImages;
   const uploaded = req.files?.length
-    ? await Promise.all(req.files.map((f) => storageService.uploadBuffer(f.buffer, { folder: `mboatrust/inventory/${item.quincaillerieId}` })))
+    ? await Promise.all(req.files.map((f) => storageService.uploadBuffer(f.buffer, { folder: `mboatrust/inventory/${item.supplierId}` })))
     : [];
   const { existingImages: _drop, ...rest } = req.body;
   Object.assign(item, rest);
@@ -131,7 +131,7 @@ const update = catchAsync(async (req, res) => {
 const duplicate = catchAsync(async (req, res) => {
   const original = await loadOwnedItem(req.params.id, req.user._id);
   const clone = await InventoryItem.create({
-    quincaillerieId: original.quincaillerieId,
+    supplierId: original.supplierId,
     name: `${original.name} (Copy)`,
     sku: original.sku,
     category: original.category,
@@ -143,7 +143,7 @@ const duplicate = catchAsync(async (req, res) => {
     quantityAvailable: 0,
     minStockLevel: original.minStockLevel,
     brand: original.brand,
-    supplier: original.supplier,
+    sourcedFrom: original.sourcedFrom,
     specifications: original.specifications,
     dimensions: original.dimensions,
     projectSuitability: original.projectSuitability,
@@ -173,12 +173,12 @@ const remove = catchAsync(async (req, res) => {
 });
 
 /** One request, many items — archive/restore/delete a whole selection at
- * once. Scoped with quincaillerieId in the filter (not just an $in on ids)
- * so a malicious/mistaken id list can never touch another store's items. */
+ * once. Scoped with supplierId in the filter (not just an $in on ids) so a
+ * malicious/mistaken id list can never touch another store's items. */
 const bulk = catchAsync(async (req, res) => {
-  const myQuincaillerieId = await requireMyQuincaillerieId(req.user._id);
+  const mySupplierId = await requireMySupplierId(req.user._id);
   const { ids, action } = req.body;
-  const filter = { _id: { $in: ids }, quincaillerieId: myQuincaillerieId };
+  const filter = { _id: { $in: ids }, supplierId: mySupplierId };
 
   if (action === 'delete') {
     const result = await InventoryItem.deleteMany(filter);
@@ -189,4 +189,4 @@ const bulk = catchAsync(async (req, res) => {
   return ok(res, { matched: result.modifiedCount });
 });
 
-module.exports = { getMine, getByQuincaillerie, getPublicActive, getOne, create, update, duplicate, archive, restore, remove, bulk };
+module.exports = { getMine, getBySupplier, getPublicActive, getOne, create, update, duplicate, archive, restore, remove, bulk };

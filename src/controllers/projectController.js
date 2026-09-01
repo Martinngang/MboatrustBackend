@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { Project, Escrow, Dispute, Bid, RiskFlag, User, QuincaillerieProfile, MaterialOrder } = require('../models');
+const { Project, Escrow, Dispute, Bid, RiskFlag, User, SupplierProfile, MaterialOrder } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
@@ -20,9 +20,9 @@ const getAll = catchAsync(async (req, res) => {
   if (projectType) filter.projectType = projectType;
   if (status) filter.status = status;
   if (ownerId) filter.ownerId = ownerId;
-  // A funder never owns the project they fund — that's ownerId's role (the
-  // recipient) — so "projects I've funded" can only be answered by looking
-  // at who actually paid into escrow, not at the Project document itself.
+  // A funder never owns the project they fund — that's ownerId's role — so
+  // "projects I've funded" can only be answered by looking at who actually
+  // paid into escrow, not at the Project document itself.
   if (funderId) {
     const fundedProjectIds = await Escrow.distinct('projectId', { funderId, type: 'fund' });
     filter._id = { $in: fundedProjectIds };
@@ -60,20 +60,24 @@ const getOne = catchAsync(async (req, res) => {
 });
 
 // Role-based separation: a tender is a Funder posting work for a contractor
-// to bid on; a funding request is a Recipient asking to be funded. Without
-// this, POST /projects had no requireRole at all (it can't be a single
-// static middleware since the *role required* depends on req.body.projectType,
-// not the route) — any authenticated account, contractor included, could
-// create either type. land_purchase is deliberately left ungated here: it
-// isn't part of this funder/contractor separation and this endpoint's
-// existing behavior for it is unreviewed/unchanged.
+// to bid on. Without this, POST /projects had no requireRole at all (it
+// can't be a single static middleware since the *role required* depends on
+// req.body.projectType, not the route) — any authenticated account,
+// contractor included, could create a tender. 'funding' (the Recipient-role
+// funding-request project type) is retired outright — the feature has been
+// removed platform-wide, so creation is rejected unconditionally regardless
+// of role; existing historical 'funding' projects remain readable via the
+// normal getAll/getOne paths, they just can never be created again.
+// land_purchase is deliberately left ungated here: it isn't part of this
+// funder/contractor separation and this endpoint's existing behavior for it
+// is unreviewed/unchanged.
 function assertCanCreateProjectType(user, projectType) {
   const hasRole = (roleType) => user.roles?.some((r) => r.roleType === roleType);
   if (projectType === 'tender' && !hasRole('funder')) {
     throw ApiError.forbidden('Only a Project Funder can post a tender');
   }
-  if (projectType === 'funding' && !hasRole('recipient')) {
-    throw ApiError.forbidden('Only a Project Recipient can create a funding request');
+  if (projectType === 'funding') {
+    throw ApiError.forbidden('Funding-request projects are no longer supported');
   }
 }
 
@@ -283,31 +287,35 @@ async function releaseMilestoneEscrow(project, milestone) {
     contractorId = acceptedBid?.contractorId || null;
   }
 
-  // Real payee routing for a materials-managed milestone: if a quincaillerie
-  // has actually confirmed/dispatched/delivered an order against this exact
+  // Real payee routing for a materials-managed milestone: if a supplier has
+  // actually confirmed/dispatched/delivered an order against this exact
   // milestone by the time it's approved, the release pays that store
   // directly instead of the project's usual payee — mirroring what the
   // frontend's resolveMilestonePayee has only ever been able to *display*.
   // Every other milestone keeps today's existing behavior (payeePhoneNumber
-  // null, a known pre-existing gap in the recipient/contractor disbursement
-  // path — out of scope here, since fixing that needs a real payout-details
-  // capture step for those actors that doesn't exist yet).
+  // null, a known pre-existing gap in the contractor disbursement path —
+  // out of scope here, since fixing that needs a real payout-details
+  // capture step for that actor that doesn't exist yet). The 'recipient'
+  // fallback below is unreachable for any new project (funding-project
+  // creation is retired, see assertCanCreateProjectType) but is kept as-is
+  // so a still-open legacy funding project's milestone release keeps
+  // producing a valid, historically-consistent payeeType.
   let payeeType = project.projectType === 'tender' ? 'contractor' : 'recipient';
-  let payeeQuincaillerieId = null;
+  let payeeSupplierId = null;
   let payoutProvider = 'mtn_momo';
   let payeePhoneNumber = null;
   let payoutMethodId = null;
   const materialsOrder = await MaterialOrder.findOne({
     milestoneId: milestone._id,
     status: { $in: ['confirmed', 'out_for_delivery', 'delivered'] },
-  }).select('quincaillerieId');
+  }).select('supplierId');
   if (materialsOrder) {
-    const quincaillerie = await QuincaillerieProfile.findById(materialsOrder.quincaillerieId).select('paymentProvider payoutPhoneNumber');
-    if (quincaillerie) {
-      payeeType = 'quincaillerie';
-      payeeQuincaillerieId = quincaillerie._id;
-      payoutProvider = quincaillerie.paymentProvider;
-      payeePhoneNumber = quincaillerie.payoutPhoneNumber || null;
+    const supplier = await SupplierProfile.findById(materialsOrder.supplierId).select('paymentProvider payoutPhoneNumber');
+    if (supplier) {
+      payeeType = 'supplier';
+      payeeSupplierId = supplier._id;
+      payoutProvider = supplier.paymentProvider;
+      payeePhoneNumber = supplier.payoutPhoneNumber || null;
     }
   } else {
     const targetUserId = payeeType === 'contractor' ? contractorId : project.ownerId;
@@ -346,7 +354,7 @@ async function releaseMilestoneEscrow(project, milestone) {
       milestoneId: milestone._id,
       contractorId,
       payeeType,
-      payeeQuincaillerieId,
+      payeeSupplierId,
       payeePhoneNumber,
       payoutMethodId,
       type: 'release',
@@ -516,31 +524,31 @@ const addCoSigner = catchAsync(async (req, res) => {
   return ok(res, project);
 });
 
-/** Assigns (or, with quincaillerieId: null, clears) the project's preferred
+/** Assigns (or, with supplierId: null, clears) the project's preferred
  * materials supplier — deliberately its own endpoint rather than folded into
  * `update` above: assigning a supplier is pure routing metadata that can
  * never desync an escrow ledger, so unlike totalAmount/milestones it must
  * stay legal at any project status, not just while still 'draft'/'open'.
- * This is what lets a funder browse/compare real quincaillerie profiles
+ * This is what lets a funder browse/compare real supplier profiles
  * (inventory, pricing, location) via the dedicated assignment screen and
  * commit to one whenever they're ready — not forced into the choice at
  * project-creation time. */
-const assignQuincaillerie = catchAsync(async (req, res) => {
+const assignSupplier = catchAsync(async (req, res) => {
   const project = await Project.findById(req.params.id);
   if (!project) throw ApiError.notFound('Project not found');
   const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
   if (String(project.ownerId) !== String(req.user._id) && !isAdmin) throw ApiError.forbidden();
 
-  const { quincaillerieId } = req.body;
-  if (quincaillerieId) {
-    const quincaillerie = await QuincaillerieProfile.findById(quincaillerieId).select('_id applicationStatus');
-    if (!quincaillerie) throw ApiError.notFound('Quincaillerie not found');
-    if (quincaillerie.applicationStatus !== 'approved') throw ApiError.badRequest('This quincaillerie is not approved yet');
-    project.materialsManagedBy = 'quincaillerie';
-    project.preferredQuincaillerieId = quincaillerieId;
+  const { supplierId } = req.body;
+  if (supplierId) {
+    const supplier = await SupplierProfile.findById(supplierId).select('_id applicationStatus');
+    if (!supplier) throw ApiError.notFound('Supplier not found');
+    if (supplier.applicationStatus !== 'approved') throw ApiError.badRequest('This supplier is not approved yet');
+    project.materialsManagedBy = 'supplier';
+    project.preferredSupplierId = supplierId;
   } else {
     project.materialsManagedBy = 'contractor';
-    project.preferredQuincaillerieId = null;
+    project.preferredSupplierId = null;
   }
   await project.save();
   return ok(res, project);
@@ -583,10 +591,10 @@ async function applyApprovalDecision(req, project, milestone) {
   } else if (String(req.user._id) !== String(project.ownerId)) {
     // The single-approver default has exactly one authorized decider:
     // project.ownerId — same "ownerId is the authoritative party regardless
-    // of pillar" rule update/cancel/assignQuincaillerie already apply (the
-    // funder for a tender, the recipient for a funding project, consistent
-    // with the multisig path just above also pairing ownerId with the
-    // co-signer rather than inventing a separate "funder" identity). Without
+    // of pillar" rule update/cancel/assignSupplier already apply (the funder
+    // for a tender, consistent with the multisig path just above also
+    // pairing ownerId with the co-signer rather than inventing a separate
+    // "funder" identity). Without
     // this check, any authenticated caller at all — including the
     // contractor/awarded party whose own work is under review — could
     // register themselves as the sole approver and release real escrowed
@@ -698,7 +706,8 @@ const decideApproval = catchAsync(async (req, res) => {
 });
 
 /** Is this user a real party to this project — the owner (funder on a
- * tender, recipient on a funding/land_purchase project), its co-signer, or
+ * tender; the project's own owner on a land_purchase project, or a legacy
+ * funding project — that project type is retired), its co-signer, or
  * (tender-only) the contractor whose bid was accepted? Shared by
  * disputeMilestone and requestMilestoneChanges — neither previously checked
  * this at all, which let any authenticated stranger dispute or send back a
@@ -743,7 +752,7 @@ const disputeMilestone = catchAsync(async (req, res) => {
 /** A lighter-weight alternative to a formal dispute: the project owner (or
  * co-signer, same authority decideApproval respects) sends a submitted
  * milestone back to 'pending' with a reason instead of escalating — no
- * money moves, the contractor/recipient can just resubmit evidence. Every
+ * money moves, the contractor can just resubmit evidence. Every
  * round is kept in `changeRequests`, not just the latest, so both sides see
  * the full back-and-forth. Clearing `approvers` matters: without it, a
  * stale 'approved' entry from *before* this round would let the next
@@ -794,6 +803,6 @@ module.exports = {
   disputeMilestone,
   requestMilestoneChanges,
   addCoSigner,
-  assignQuincaillerie,
+  assignSupplier,
   getFundingSummaryData,
 };

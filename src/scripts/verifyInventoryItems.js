@@ -1,12 +1,12 @@
 // Real, end-to-end proof that the redesigned inventory system works —
 // genuine HTTP requests against a running server. Mirrors
-// verifyQuincaillerieProfile.js's shape: tagged fixtures, cleaned up at the
+// verifySupplierProfile.js's shape: tagged fixtures, cleaned up at the
 // end whether the run passes or fails. Requires the backend dev server to
 // be running (npm run dev).
 const axios = require('axios');
 const { connectDB } = require('../config/db');
 const mongoose = require('mongoose');
-const { User, QuincaillerieProfile, InventoryItem } = require('../models');
+const { User, SupplierProfile, InventoryItem } = require('../models');
 
 const TAG = 'verify-inventory-items-script';
 const BASE_URL = process.env.VERIFY_BASE_URL || 'http://localhost:5000/api/v1';
@@ -29,11 +29,11 @@ async function run() {
   try {
     const owner = await User.create({
       fullName: `${TAG} Owner`, email: `${TAG}-owner-${Date.now()}@test.local`,
-      firebaseUid: `${TAG}-owner-${Date.now()}`, roles: [{ roleType: 'quincaillerie' }],
+      firebaseUid: `${TAG}-owner-${Date.now()}`, roles: [{ roleType: 'supplier' }],
     });
     const otherOwner = await User.create({
       fullName: `${TAG} Other Owner`, email: `${TAG}-other-${Date.now()}@test.local`,
-      firebaseUid: `${TAG}-other-${Date.now()}`, roles: [{ roleType: 'quincaillerie' }],
+      firebaseUid: `${TAG}-other-${Date.now()}`, roles: [{ roleType: 'supplier' }],
     });
     const outsider = await User.create({
       fullName: `${TAG} Outsider`, email: `${TAG}-outsider-${Date.now()}@test.local`,
@@ -41,10 +41,10 @@ async function run() {
     });
     createdUserIds.push(owner._id, otherOwner._id, outsider._id);
 
-    const profile = await QuincaillerieProfile.create({
+    const profile = await SupplierProfile.create({
       ownerId: owner._id, businessName: `${TAG} Store`, region: 'Littoral', address: 'Akwa', applicationStatus: 'approved',
     });
-    const otherProfile = await QuincaillerieProfile.create({
+    const otherProfile = await SupplierProfile.create({
       ownerId: otherOwner._id, businessName: `${TAG} Other Store`, region: 'Centre', address: 'Bastos', applicationStatus: 'approved',
     });
     createdProfileIds.push(profile._id, otherProfile._id);
@@ -57,7 +57,7 @@ async function run() {
     const create1 = await ownerClient.post('/inventory-items', {
       name: `${TAG} Cement 50kg`, category: 'Cement & Concrete', subcategory: 'Cement', unit: 'bag',
       price: 6200, quantityAvailable: 3, minStockLevel: 10, brand: 'Cimencam',
-      supplier: { name: 'Cimencam Ltd', contact: '+237 600 000 000' },
+      sourcedFrom: { name: 'Cimencam Ltd', contact: '+237 600 000 000' },
       specifications: [{ key: 'Grade', value: '42.5N' }],
       dimensions: { weightKg: 50, unit: 'cm' },
       projectSuitability: ['Housing', 'Infrastructure'],
@@ -74,16 +74,16 @@ async function run() {
 
     // ── Ownership enforcement ────────────────────────────────────────────
     const outsiderCreate = await outsiderClient.post('/inventory-items', { name: 'x', category: 'x', unit: 'x', price: 1 });
-    record('A user with no quincaillerie profile cannot create inventory', outsiderCreate.status === 400, `got ${outsiderCreate.status}`);
+    record('A user with no supplier profile cannot create inventory', outsiderCreate.status === 400, `got ${outsiderCreate.status}`);
 
     const otherOwnerEdit = await otherOwnerClient.patch(`/inventory-items/${item1Id}`, { price: 1 });
-    record("Another quincaillerie owner cannot edit someone else's item", otherOwnerEdit.status === 403, `got ${otherOwnerEdit.status}`);
+    record("Another supplier owner cannot edit someone else's item", otherOwnerEdit.status === 403, `got ${otherOwnerEdit.status}`);
 
-    // ── Read: mine (owner, all statuses) vs by-quincaillerie (active only) ──
+    // ── Read: mine (owner, all statuses) vs by-supplier (active only) ──
     const mine = await ownerClient.get('/inventory-items/mine');
     record('Owner sees both items in "mine"', mine.data?.data?.length === 2, `count=${mine.data?.data?.length}`);
 
-    const byStore = await outsiderClient.get(`/inventory-items/by-quincaillerie/${profile._id}`);
+    const byStore = await outsiderClient.get(`/inventory-items/by-supplier/${profile._id}`);
     record('Any authenticated user can browse the store\'s active catalogue', byStore.status === 200 && byStore.data?.data?.length === 2);
 
     // ── Search / filter / sort ───────────────────────────────────────────
@@ -120,7 +120,7 @@ async function run() {
     const archived = await ownerClient.post(`/inventory-items/${dupId}/archive`);
     record('Owner can archive an item', archived.data?.data?.status === 'archived');
 
-    const byStoreAfterArchive = await outsiderClient.get(`/inventory-items/by-quincaillerie/${profile._id}`);
+    const byStoreAfterArchive = await outsiderClient.get(`/inventory-items/by-supplier/${profile._id}`);
     record('Archived item no longer visible in the public store catalogue', !byStoreAfterArchive.data?.data?.some((i) => i._id === dupId));
 
     const mineAfterArchive = await ownerClient.get('/inventory-items/mine');
@@ -159,8 +159,8 @@ async function run() {
     }
     throw err;
   } finally {
-    await InventoryItem.deleteMany({ quincaillerieId: { $in: createdProfileIds } });
-    await QuincaillerieProfile.deleteMany({ _id: { $in: createdProfileIds } });
+    await InventoryItem.deleteMany({ supplierId: { $in: createdProfileIds } });
+    await SupplierProfile.deleteMany({ _id: { $in: createdProfileIds } });
     await User.deleteMany({ _id: { $in: createdUserIds } });
     console.log('\n[cleanup] all verification fixtures removed.');
     await mongoose.disconnect();

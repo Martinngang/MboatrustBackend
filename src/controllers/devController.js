@@ -14,22 +14,21 @@ const env = require('../config/env');
  * API calls work end-to-end today. Only mounted/active when
  * DEV_AUTH_BYPASS=true — never available in production.
  */
-// Keyed by the frontend's Role string (funder/recipient/contractor/seller) —
+// Keyed by the frontend's Role string (funder/contractor/seller) —
 // `roleType` is the corresponding value from User's roleType enum, which
 // isn't always the same string (the frontend's "seller" is "land_seller"
 // on the backend).
 const DEMO_USERS = {
   funder: { fullName: 'Demo Funder', email: 'demo-funder@mboatrust.test', roleType: 'funder' },
-  recipient: { fullName: 'Demo Recipient', email: 'demo-recipient@mboatrust.test', roleType: 'recipient' },
   contractor: { fullName: 'Demo Contractor', email: 'demo-contractor@mboatrust.test', roleType: 'contractor' },
   seller: { fullName: 'Demo Seller', email: 'demo-seller@mboatrust.test', roleType: 'land_seller' },
   // Every account whose frontend `role` is legitimately null — an
-  // admin-only account, or a quincaillerie-only one before/without
-  // approval (see Onboarding.tsx's RoleScreen) — resolves here instead of
-  // colliding with a real role's demo identity. context.tsx passes this
-  // exact key via `role ?? 'null-role'`. roleType is null on purpose: this
-  // identity starts with no primary role at all (only the verifier/admin
-  // convenience roles below), so registering as quincaillerie through it
+  // admin-only account, or a supplier-only one before/without approval (see
+  // Onboarding.tsx's RoleScreen) — resolves here instead of colliding with
+  // a real role's demo identity. context.tsx passes this exact key via
+  // `role ?? 'null-role'`. roleType is null on purpose: this identity
+  // starts with no primary role at all (only the verifier/admin
+  // convenience roles below), so registering as a supplier through it
   // still exercises the real pending→approve pipeline instead of the role
   // being pre-seeded for free.
   'null-role': { fullName: 'Demo Account (No Primary Role)', email: 'demo-null-role@mboatrust.test', roleType: null },

@@ -12,7 +12,7 @@ const RoleEntrySchema = new Schema(
   {
     roleType: {
       type: String,
-      enum: ['funder', 'recipient', 'contractor', 'land_seller', 'verifier', 'admin', 'quincaillerie'],
+      enum: ['funder', 'contractor', 'land_seller', 'verifier', 'admin', 'supplier'],
       required: true,
     },
     profileRef: { type: Schema.Types.ObjectId, default: null },
@@ -20,9 +20,9 @@ const RoleEntrySchema = new Schema(
   { _id: false }
 );
 
-// Saved payout destinations — recipients, contractors, and sellers store their
-// MoMo/OM phone numbers here so withdrawals and milestone releases can be
-// routed to the right account without re-entering details each time.
+// Saved payout destinations — contractors and sellers store their MoMo/OM
+// phone numbers here so withdrawals and milestone releases can be routed to
+// the right account without re-entering details each time.
 const PayoutMethodSchema = new Schema(
   {
     label: { type: String, default: '' },

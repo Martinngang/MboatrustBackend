@@ -102,11 +102,11 @@ const ProjectSchema = new Schema(
     coSignerId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     // Funder's choice at creation time: 'contractor' (default, today's only
     // behavior — whoever does the work sources their own materials) or
-    // 'quincaillerie', which requires preferredQuincaillerieId below and
-    // makes that store the pre-selected supplier RequestMaterialsScreen
-    // offers for every milestone on this project.
-    materialsManagedBy: { type: String, enum: ['contractor', 'quincaillerie'], default: 'contractor' },
-    preferredQuincaillerieId: { type: Schema.Types.ObjectId, ref: 'QuincaillerieProfile', default: null },
+    // 'supplier', which requires preferredSupplierId below and makes that
+    // store the pre-selected supplier RequestMaterialsScreen offers for
+    // every milestone on this project.
+    materialsManagedBy: { type: String, enum: ['contractor', 'supplier'], default: 'contractor' },
+    preferredSupplierId: { type: Schema.Types.ObjectId, ref: 'SupplierProfile', default: null },
     milestones: { type: [MilestoneSchema], default: [] },
   },
   { timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' } }

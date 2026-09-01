@@ -9,7 +9,7 @@ const idempotent = require('../middleware/idempotency');
 const {
   createProject,
   updateProject,
-  assignQuincaillerie,
+  assignSupplier,
   fundProject,
   submitEvidence,
   decideApproval,
@@ -34,10 +34,10 @@ router.post(
   projectController.addCoSigner
 );
 router.post(
-  '/:id/assign-quincaillerie',
+  '/:id/assign-supplier',
   authenticate,
-  validate(assignQuincaillerie),
-  projectController.assignQuincaillerie
+  validate(assignSupplier),
+  projectController.assignSupplier
 );
 router.get('/:projectId/recommended-contractors', authenticate, matchingController.getRecommended);
 router.get('/:projectId/bids-with-scores', authenticate, matchingController.getBidsWithScores);

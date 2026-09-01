@@ -3,7 +3,7 @@ const { z } = require('zod');
 // multipart/form-data (portfolio images attached) can only carry string
 // fields — this accepts either a real array (plain JSON request) or a
 // JSON-encoded string (multipart request), same convention as
-// verifierProfileValidators.js's stringArray / quincaillerieProfileValidators.js's jsonField.
+// verifierProfileValidators.js's stringArray / supplierProfileValidators.js's jsonField.
 function jsonField(schema) {
   return z.preprocess((val) => {
     if (typeof val === 'string') {

@@ -1,11 +1,11 @@
-const { QuincaillerieProfile, User } = require('../models');
+const { SupplierProfile, User } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const { logAdminAction } = require('../services/adminActionLogService');
 
 const getMine = catchAsync(async (req, res) => {
-  const profile = await QuincaillerieProfile.findOne({ ownerId: req.user._id });
+  const profile = await SupplierProfile.findOne({ ownerId: req.user._id });
   return ok(res, profile);
 });
 
@@ -15,7 +15,7 @@ const getMine = catchAsync(async (req, res) => {
  * applicationStatus on its own beyond that reset — only approve/reject do.
  * Mirrors verifierProfileController.upsertMine exactly. */
 const upsertMine = catchAsync(async (req, res) => {
-  const existing = await QuincaillerieProfile.findOne({ ownerId: req.user._id });
+  const existing = await SupplierProfile.findOne({ ownerId: req.user._id });
   const wasRejected = existing?.applicationStatus === 'rejected';
 
   const update = { ...req.body };
@@ -25,7 +25,7 @@ const upsertMine = catchAsync(async (req, res) => {
     update.reviewedAt = null;
   }
 
-  const profile = await QuincaillerieProfile.findOneAndUpdate(
+  const profile = await SupplierProfile.findOneAndUpdate(
     { ownerId: req.user._id },
     { $set: update, $setOnInsert: { ownerId: req.user._id } },
     { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
@@ -33,14 +33,14 @@ const upsertMine = catchAsync(async (req, res) => {
   return ok(res, profile);
 });
 
-/** Authenticated (any role), approved-only — funders/recipients browse this
+/** Authenticated (any role), approved-only — funders/contractors browse this
  * to pick a store when requesting a materials milestone, unlike verifier
  * profiles, which are never browsed by ordinary users. Deliberately a
  * separate endpoint from getAll below rather than a query-param toggle on
  * it, so there's no risk of a pending applicant's data leaking to a
  * non-admin through a filter mistake. */
 const getDirectory = catchAsync(async (req, res) => {
-  const items = await QuincaillerieProfile.find({ applicationStatus: 'approved' })
+  const items = await SupplierProfile.find({ applicationStatus: 'approved' })
     .populate('ownerId', 'fullName')
     .sort('-completedOrderCount');
   return ok(res, items);
@@ -54,12 +54,12 @@ const getAll = catchAsync(async (req, res) => {
   if (applicationStatus) filter.applicationStatus = applicationStatus;
 
   const [items, total] = await Promise.all([
-    QuincaillerieProfile.find(filter)
+    SupplierProfile.find(filter)
       .populate('ownerId', 'fullName email')
       .sort('-createdAt')
       .skip((page - 1) * limit)
       .limit(Number(limit)),
-    QuincaillerieProfile.countDocuments(filter),
+    SupplierProfile.countDocuments(filter),
   ]);
   return ok(res, items, { page: Number(page), limit: Number(limit), total });
 });
@@ -70,8 +70,8 @@ const getAll = catchAsync(async (req, res) => {
  * the application shows approved but the role didn't actually land. Mirrors
  * verifierProfileController.approve exactly. */
 const approve = catchAsync(async (req, res) => {
-  const profile = await QuincaillerieProfile.findById(req.params.id);
-  if (!profile) throw ApiError.notFound('Quincaillerie application not found');
+  const profile = await SupplierProfile.findById(req.params.id);
+  if (!profile) throw ApiError.notFound('Supplier application not found');
 
   profile.applicationStatus = 'approved';
   profile.reviewedBy = req.user._id;
@@ -79,24 +79,24 @@ const approve = catchAsync(async (req, res) => {
   await profile.save();
 
   const user = await User.findById(profile.ownerId);
-  if (user && !user.roles.some((r) => r.roleType === 'quincaillerie')) {
-    user.roles.push({ roleType: 'quincaillerie' });
+  if (user && !user.roles.some((r) => r.roleType === 'supplier')) {
+    user.roles.push({ roleType: 'supplier' });
     await user.save();
   }
 
-  await logAdminAction({ adminId: req.user._id, action: 'quincaillerieProfile.approve', targetType: 'QuincaillerieProfile', targetId: profile._id, detail: { ownerId: profile.ownerId } });
+  await logAdminAction({ adminId: req.user._id, action: 'supplierProfile.approve', targetType: 'SupplierProfile', targetId: profile._id, detail: { ownerId: profile.ownerId } });
 
   return ok(res, profile);
 });
 
 const reject = catchAsync(async (req, res) => {
-  const profile = await QuincaillerieProfile.findById(req.params.id);
-  if (!profile) throw ApiError.notFound('Quincaillerie application not found');
+  const profile = await SupplierProfile.findById(req.params.id);
+  if (!profile) throw ApiError.notFound('Supplier application not found');
   profile.applicationStatus = 'rejected';
   profile.reviewedBy = req.user._id;
   profile.reviewedAt = new Date();
   await profile.save();
-  await logAdminAction({ adminId: req.user._id, action: 'quincaillerieProfile.reject', targetType: 'QuincaillerieProfile', targetId: profile._id, detail: { ownerId: profile.ownerId } });
+  await logAdminAction({ adminId: req.user._id, action: 'supplierProfile.reject', targetType: 'SupplierProfile', targetId: profile._id, detail: { ownerId: profile.ownerId } });
   return ok(res, profile);
 });
 

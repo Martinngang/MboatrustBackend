@@ -35,7 +35,7 @@ router.use('/dev', require('./devRoutes'));
 router.use('/team-members', require('./teamMemberRoutes'));
 router.use('/project-templates', require('./projectTemplateRoutes'));
 router.use('/verifier-profiles', require('./verifierProfileRoutes'));
-router.use('/quincaillerie-profiles', require('./quincaillerieProfileRoutes'));
+router.use('/supplier-profiles', require('./supplierProfileRoutes'));
 router.use('/inventory-items', require('./inventoryItemRoutes'));
 router.use('/material-orders', require('./materialOrderRoutes'));
 router.use('/admin/system-health', require('./systemHealthRoutes'));

@@ -42,7 +42,7 @@ async function getRecentActivity(userId, { limit = 50 } = {}) {
         if (String(e.submittedBy) === String(userId)) {
           events.push({
             type: 'milestone_submitted',
-            path: '/recipient/submission-status',
+            path: '/home',
             createdAt: e.createdAt,
             projectTitle: p.title,
             milestoneName: m.name,

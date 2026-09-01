@@ -29,7 +29,7 @@ module.exports = {
   TeamMember: require('./TeamMember'),
   ProjectTemplate: require('./ProjectTemplate'),
   VerifierProfile: require('./VerifierProfile'),
-  QuincaillerieProfile: require('./QuincaillerieProfile'),
+  SupplierProfile: require('./SupplierProfile'),
   InventoryItem: require('./InventoryItem'),
   MaterialOrder: require('./MaterialOrder'),
   SystemEvent: require('./SystemEvent'),

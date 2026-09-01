@@ -23,13 +23,47 @@ async function resolveTarget(task) {
   return { title: project.title, location: project.locationName, milestoneTitle: milestone?.name, projectId: project._id };
 }
 
+/** Whether `userId` is the real-world owner of the milestone/land-listing a
+ * verification task targets — a funder checking their own project's
+ * milestone, or a seller checking their own listing. Distinct from being
+ * the assigned verifier: this is "do you own the thing being inspected". */
+async function isTargetOwner(userId, targetType, targetId) {
+  if (targetType === 'land_listing') {
+    const listing = await LandListing.findById(targetId).select('sellerId').lean();
+    return Boolean(listing && String(listing.sellerId) === String(userId));
+  }
+  const project = await Project.findOne({ 'milestones._id': targetId }).select('ownerId coSignerId').lean();
+  if (!project) return false;
+  return String(project.ownerId) === String(userId) || String(project.coSignerId) === String(userId);
+}
+
 const getAll = catchAsync(async (req, res) => {
   const { page = 1, limit = 20, targetType, targetId, verifierId, status } = req.query;
   const filter = {};
   if (targetType) filter.targetType = targetType;
   if (targetId) filter.targetId = targetId;
-  if (verifierId) filter.verifierId = verifierId;
   if (status) filter.status = status;
+
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+
+  if (targetId) {
+    // A specific-target lookup ("has this milestone/listing been
+    // independently verified?") is legitimate for whoever owns that real
+    // target, not just the assigned verifier — e.g. a funder checking their
+    // own project's milestone review. Scoping by verifierId here would hide
+    // the real report from the one person the feature exists for.
+    if (!isAdmin && !(await isTargetOwner(req.user._id, targetType, targetId))) {
+      filter.verifierId = req.user._id;
+    }
+  } else if (verifierId && (isAdmin || String(verifierId) === String(req.user._id))) {
+    // Self-scoped by default — a verifier's own task queue, not every
+    // verifier's assignments and (once submitted) private field reports
+    // platform-wide. Only an admin may see another verifier's tasks or the
+    // full unfiltered list.
+    filter.verifierId = verifierId;
+  } else if (!isAdmin) {
+    filter.verifierId = req.user._id;
+  }
 
   const [rawItems, total] = await Promise.all([
     VerificationTask.find(filter)
@@ -46,6 +80,16 @@ const getAll = catchAsync(async (req, res) => {
 const getOne = catchAsync(async (req, res) => {
   const task = await VerificationTask.findById(req.params.id);
   if (!task) throw ApiError.notFound('Verification task not found');
+
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  if (
+    !isAdmin &&
+    String(task.verifierId) !== String(req.user._id) &&
+    !(await isTargetOwner(req.user._id, task.targetType, task.targetId))
+  ) {
+    throw ApiError.forbidden();
+  }
+
   const target = await resolveTarget(task);
   return ok(res, { ...task.toObject(), target });
 });

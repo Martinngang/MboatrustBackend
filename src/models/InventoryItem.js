@@ -16,20 +16,20 @@ const DimensionsSchema = new Schema(
   { _id: false }
 );
 
-const SupplierSchema = new Schema({ name: { type: String, default: '' }, contact: { type: String, default: '' } }, { _id: false });
+const SourcedFromSchema = new Schema({ name: { type: String, default: '' }, contact: { type: String, default: '' } }, { _id: false });
 
-/** A quincaillerie's own product catalogue — real backend now (was
- * materials.tsx's local useState mock). category/subcategory/unit are free
- * strings, not enums, on purpose: the frontend ships a curated default
- * taxonomy as suggestions, but an owner can type anything new and it
- * persists exactly as typed — "extensible" per the product ask, matching
- * Project.category/ContractorProfile.categories' existing "let the market
- * define the list" convention rather than a fixed enum anywhere in this
- * schema. status is the archive/restore switch; a real DELETE removes the
- * document entirely (see controller) rather than a third status value. */
+/** A supplier's own product catalogue — real backend now (was materials.tsx's
+ * local useState mock). category/subcategory/unit are free strings, not
+ * enums, on purpose: the frontend ships a curated default taxonomy as
+ * suggestions, but an owner can type anything new and it persists exactly as
+ * typed — "extensible" per the product ask, matching Project.category/
+ * ContractorProfile.categories' existing "let the market define the list"
+ * convention rather than a fixed enum anywhere in this schema. status is the
+ * archive/restore switch; a real DELETE removes the document entirely (see
+ * controller) rather than a third status value. */
 const InventoryItemSchema = new Schema(
   {
-    quincaillerieId: { type: Schema.Types.ObjectId, ref: 'QuincaillerieProfile', required: true },
+    supplierId: { type: Schema.Types.ObjectId, ref: 'SupplierProfile', required: true },
     name: { type: String, required: true },
     sku: { type: String, default: '' },
     category: { type: String, required: true },
@@ -41,12 +41,14 @@ const InventoryItemSchema = new Schema(
     quantityAvailable: { type: Number, required: true, min: 0, default: 0 },
     minStockLevel: { type: Number, required: true, min: 0, default: 0 },
     brand: { type: String, default: '' },
-    supplier: { type: SupplierSchema, default: () => ({}) },
+    // Where this store itself sources the item from — an upstream vendor,
+    // unrelated to the platform's own Supplier role/user.
+    sourcedFrom: { type: SourcedFromSchema, default: () => ({}) },
     specifications: { type: [SpecificationSchema], default: [] },
     dimensions: { type: DimensionsSchema, default: () => ({}) },
     // Subset of the platform's project categories (Water & Sanitation,
     // Education, Healthcare, Infrastructure, Agriculture, Housing) this
-    // product is suited for — lets a funder/recipient filter a store's
+    // product is suited for — lets a funder/contractor filter a store's
     // catalogue by what their specific project actually needs.
     projectSuitability: { type: [String], default: [] },
     status: { type: String, enum: ['active', 'archived'], default: 'active' },
@@ -54,8 +56,8 @@ const InventoryItemSchema = new Schema(
   { timestamps: true }
 );
 
-InventoryItemSchema.index({ quincaillerieId: 1, status: 1 });
-InventoryItemSchema.index({ quincaillerieId: 1, category: 1 });
+InventoryItemSchema.index({ supplierId: 1, status: 1 });
+InventoryItemSchema.index({ supplierId: 1, category: 1 });
 InventoryItemSchema.index({ name: 'text', sku: 'text', description: 'text', brand: 'text' });
 
 module.exports = model('InventoryItem', InventoryItemSchema);

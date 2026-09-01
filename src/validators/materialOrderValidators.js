@@ -10,12 +10,12 @@ const orderItemInput = z.object({
 const createMaterialOrder = z.object({
   projectId: z.string(),
   milestoneId: z.string(),
-  quincaillerieId: z.string(),
+  supplierId: z.string(),
   items: z.array(orderItemInput).min(1),
   deliveryAddress: z.string().optional().default(''),
 });
 
-// The quincaillerie owner may adjust items/pricing when confirming (real
+// The supplier owner may adjust items/pricing when confirming (real
 // stock/price at the time of confirmation can differ from what the
 // requester guessed while browsing) — same "confirmation can correct the
 // request" shape as a bid negotiation, not a rigid accept-as-is.

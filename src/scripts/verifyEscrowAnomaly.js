@@ -53,7 +53,7 @@ async function run() {
     // ── 1. Negative control: a normal, first-time release triggers nothing ──
     const normalOwner = await User.create({
       fullName: `${TAG} Normal Owner`, email: `${TAG}-normal-${Date.now()}@test.local`,
-      firebaseUid: `${TAG}-normal-${Date.now()}`, roles: [{ roleType: 'recipient' }],
+      firebaseUid: `${TAG}-normal-${Date.now()}`, roles: [{ roleType: 'funder' }],
     });
     createdUserIds.push(normalOwner._id);
     const normalProject = await makeFundingProject(normalOwner._id, [100000]);
@@ -68,7 +68,7 @@ async function run() {
     // releases, then let a real release of a wildly larger amount happen ──
     const burstOwner = await User.create({
       fullName: `${TAG} Burst Owner`, email: `${TAG}-burst-${Date.now()}@test.local`,
-      firebaseUid: `${TAG}-burst-${Date.now()}`, roles: [{ roleType: 'recipient' }],
+      firebaseUid: `${TAG}-burst-${Date.now()}`, roles: [{ roleType: 'funder' }],
     });
     createdUserIds.push(burstOwner._id);
     const burstProject = await makeFundingProject(burstOwner._id, [100000, 100000, 5000000]);
@@ -103,7 +103,7 @@ async function run() {
     // RiskFlag gets escalated straight to 'high' on their next anomaly ──
     const flaggedOwner = await User.create({
       fullName: `${TAG} Already Flagged Owner`, email: `${TAG}-flagged-${Date.now()}@test.local`,
-      firebaseUid: `${TAG}-flagged-${Date.now()}`, roles: [{ roleType: 'recipient' }],
+      firebaseUid: `${TAG}-flagged-${Date.now()}`, roles: [{ roleType: 'funder' }],
     });
     createdUserIds.push(flaggedOwner._id);
     await RiskFlag.create({ userId: flaggedOwner._id, flagType: 'multiple_disputes', severity: 'medium', detail: { disputeCount: 5 } });
@@ -131,7 +131,7 @@ async function run() {
     // site as the guard it must never interfere with) ──────────────────
     const raceOwner = await User.create({
       fullName: `${TAG} Race Owner`, email: `${TAG}-race-${Date.now()}@test.local`,
-      firebaseUid: `${TAG}-race-${Date.now()}`, roles: [{ roleType: 'recipient' }],
+      firebaseUid: `${TAG}-race-${Date.now()}`, roles: [{ roleType: 'funder' }],
     });
     createdUserIds.push(raceOwner._id);
     const raceProject = await makeFundingProject(raceOwner._id, [50000]);

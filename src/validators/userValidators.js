@@ -16,20 +16,22 @@ const updateProfile = z.object({
 // Self-service roles only — a user can freely switch into any of these
 // during onboarding or later (see Onboarding.tsx's ROLE_TYPE map and
 // AdditionalScreens.tsx's contractor self-add, the only two real callers).
-// 'verifier'/'admin' are trust-elevating and must never be self-grantable —
-// see adminGrantRole below for the admin-only path onto those two.
+// 'verifier'/'admin'/'supplier' are trust-elevating and must never be
+// self-grantable — see adminGrantRole below for the admin-only path onto
+// those, and supplierProfileController.approve for supplier's own
+// review-approval path.
 const addRole = z.object({
-  roleType: z.enum(['funder', 'recipient', 'contractor', 'land_seller']),
+  roleType: z.enum(['funder', 'contractor', 'land_seller']),
 });
 
 // Admin-only counterpart to addRole — the full role set, since an admin may
 // legitimately grant any of them (including promoting another admin,
-// approving a vetted verifier application, or approving a quincaillerie
-// registration — see quincaillerieProfileController.approve for the atomic
-// review-approval path onto 'quincaillerie'; this endpoint is the manual
+// approving a vetted verifier application, or approving a supplier
+// registration — see supplierProfileController.approve for the atomic
+// review-approval path onto 'supplier'; this endpoint is the manual
 // admin-drawer path onto the same role).
 const adminGrantRole = z.object({
-  roleType: z.enum(['funder', 'recipient', 'contractor', 'land_seller', 'verifier', 'admin', 'quincaillerie']),
+  roleType: z.enum(['funder', 'contractor', 'land_seller', 'verifier', 'admin', 'supplier']),
 });
 
 const linkAuthProvider = z.object({
@@ -55,7 +57,7 @@ const adminCreateUser = z.object({
   fullName: z.string().min(1),
   email: z.string().email().optional(),
   phoneNumber: z.string().min(1).optional(),
-  roles: z.array(z.enum(['funder', 'recipient', 'contractor', 'land_seller', 'verifier', 'admin', 'quincaillerie'])).optional(),
+  roles: z.array(z.enum(['funder', 'contractor', 'land_seller', 'verifier', 'admin', 'supplier'])).optional(),
 });
 
 // Deliberately excludes roles/passwordHash/firebaseUid/authProviders/

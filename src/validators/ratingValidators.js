@@ -6,7 +6,7 @@ const createRating = z.object({
   projectId: objectId,
   score: z.number().int().min(1).max(5),
   comment: z.string().optional().default(''),
-  roleContext: z.enum(['recipient', 'contractor', 'verifier', 'land_seller', 'quincaillerie']),
+  roleContext: z.enum(['contractor', 'verifier', 'land_seller', 'supplier']),
 });
 
 // Admin-authored rating (on behalf of a real user) — same shape as

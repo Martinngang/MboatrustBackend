@@ -6,7 +6,7 @@ const catchAsync = require('../utils/catchAsync');
 const { notifyMany } = require('../services/notificationService');
 const { logAdminAction } = require('../services/adminActionLogService');
 
-const ROLE_TYPES = ['funder', 'recipient', 'contractor', 'land_seller', 'verifier', 'admin', 'quincaillerie'];
+const ROLE_TYPES = ['funder', 'contractor', 'land_seller', 'verifier', 'admin', 'supplier'];
 
 const broadcast = catchAsync(async (req, res) => {
   const { targetRole, type, message, payload = {} } = req.body;

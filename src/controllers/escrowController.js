@@ -34,12 +34,13 @@ async function assertCanAccessEscrow(escrow, user) {
 }
 
 /** The release escrows where the caller is the actual payee — as the
- * contractor a tender-project release was paid to, or as the recipient who
- * owns the funding/land_purchase project it released on. Deliberately
- * stricter than scopeToMyTransactions: that also matches a funder's own
- * tender project (so they can see the contractor's payout in their
- * transaction history), which must NOT count as money available for the
- * funder to withdraw. */
+ * contractor a tender-project release was paid to, or (a retired,
+ * historical-only case — funding-project creation is no longer supported)
+ * as the owner of a legacy funding/land_purchase project it released on.
+ * Deliberately stricter than scopeToMyTransactions: that also matches a
+ * funder's own tender project (so they can see the contractor's payout in
+ * their transaction history), which must NOT count as money available for
+ * the funder to withdraw. */
 async function withdrawableFilter(user) {
   const myProjects = await Project.find({ ownerId: user._id }).select('_id').lean();
   return {

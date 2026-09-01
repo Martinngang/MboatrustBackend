@@ -25,7 +25,7 @@ const dimensionsSchema = z.object({
   unit: z.string().optional(),
   weightKg: z.number().nullable().optional(),
 });
-const supplierSchema = z.object({ name: z.string().optional(), contact: z.string().optional() });
+const sourcedFromSchema = z.object({ name: z.string().optional(), contact: z.string().optional() });
 
 const createItem = z.object({
   name: z.string().min(1),
@@ -41,7 +41,7 @@ const createItem = z.object({
   quantityAvailable: z.coerce.number().min(0).optional(),
   minStockLevel: z.coerce.number().min(0).optional(),
   brand: z.string().optional(),
-  supplier: jsonField(supplierSchema).optional(),
+  sourcedFrom: jsonField(sourcedFromSchema).optional(),
   specifications: jsonField(z.array(specificationSchema)).optional(),
   dimensions: jsonField(dimensionsSchema).optional(),
   projectSuitability: jsonField(z.array(z.string())).optional(),

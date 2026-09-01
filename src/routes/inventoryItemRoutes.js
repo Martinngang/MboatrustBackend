@@ -9,7 +9,7 @@ const router = Router();
 
 router.get('/mine', authenticate, controller.getMine);
 router.get('/public', authenticate, controller.getPublicActive);
-router.get('/by-quincaillerie/:quincaillerieId', authenticate, controller.getByQuincaillerie);
+router.get('/by-supplier/:supplierId', authenticate, controller.getBySupplier);
 router.post('/bulk', authenticate, validate(bulkAction), controller.bulk);
 router.get('/:id', authenticate, controller.getOne);
 router.post('/', authenticate, upload.array('images', 6), validate(createItem), controller.create);

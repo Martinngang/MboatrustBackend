@@ -43,16 +43,19 @@ const EscrowSchema = new Schema(
     // which reads this field).
     funderId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     // Set only on a 'release' escrow — who this specific payout actually
-    // goes to. 'quincaillerie' only when a real MaterialOrder for this
-    // milestone was confirmed/dispatched/delivered by the time of release
-    // (see projectController.releaseMilestoneEscrow); otherwise the
-    // project's usual payee ('contractor' for a tender, 'recipient'
-    // otherwise). Null on every non-release escrow type, which has no
-    // single payee concept.
-    payeeType: { type: String, enum: ['recipient', 'contractor', 'quincaillerie'], default: null },
-    // Set only alongside payeeType 'quincaillerie' — the specific store the
+    // goes to. 'supplier' only when a real MaterialOrder for this milestone
+    // was confirmed/dispatched/delivered by the time of release (see
+    // projectController.releaseMilestoneEscrow); otherwise the project's
+    // usual payee ('contractor' for a tender). 'recipient' is a retired
+    // value kept in the enum only so historical release escrows from
+    // legacy funding-type projects (feature retired, no new ones are
+    // created) remain valid on save — it is never produced for a new
+    // escrow. Null on every non-release escrow type, which has no single
+    // payee concept.
+    payeeType: { type: String, enum: ['recipient', 'contractor', 'supplier'], default: null },
+    // Set only alongside payeeType 'supplier' — the specific store the
     // release's paymentProvider/payeePhoneNumber were resolved from.
-    payeeQuincaillerieId: { type: Schema.Types.ObjectId, ref: 'QuincaillerieProfile', default: null },
+    payeeSupplierId: { type: Schema.Types.ObjectId, ref: 'SupplierProfile', default: null },
     type: { type: String, enum: ['fund', 'release', 'refund', 'fee_deduction'], required: true },
     grossAmount: { type: Number, required: true, min: 0 },
     feeBreakdown: { type: FeeBreakdownSchema, default: () => ({}) },

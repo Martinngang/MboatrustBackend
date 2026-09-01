@@ -29,10 +29,10 @@ const createProject = z.object({
   milestones: z.array(milestoneInput).optional().default([]),
   // Materials-managed-by is deliberately NOT set here — a project always
   // starts 'contractor'-managed (the Project schema default) and only ever
-  // becomes quincaillerie-managed via POST /projects/:id/assign-quincaillerie,
-  // once the funder has actually browsed/compared real stores. Forcing a
-  // store pick into the creation form (an earlier version of this) skipped
-  // that comparison step entirely.
+  // becomes supplier-managed via POST /projects/:id/assign-supplier, once
+  // the funder has actually browsed/compared real stores. Forcing a store
+  // pick into the creation form (an earlier version of this) skipped that
+  // comparison step entirely.
 });
 
 const updateProject = z.object({
@@ -54,9 +54,9 @@ const updateProject = z.object({
 // supplier is pure routing metadata (unlike totalAmount/milestones, it can
 // never desync an escrow ledger), so it must stay legal at any project
 // status, not just while still 'draft'/'open' like the generic update.
-// `quincaillerieId: null` unassigns, reverting to 'contractor'-managed.
-const assignQuincaillerie = z.object({
-  quincaillerieId: z.string().nullable(),
+// `supplierId: null` unassigns, reverting to 'contractor'-managed.
+const assignSupplier = z.object({
+  supplierId: z.string().nullable(),
 });
 
 const fundProject = z.object({
@@ -93,4 +93,4 @@ const requestChanges = z.object({
   reason: z.string().min(1),
 });
 
-module.exports = { createProject, updateProject, assignQuincaillerie, fundProject, submitEvidence, decideApproval, requestChanges };
+module.exports = { createProject, updateProject, assignSupplier, fundProject, submitEvidence, decideApproval, requestChanges };
