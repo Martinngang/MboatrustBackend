@@ -2,6 +2,7 @@ const { User } = require('../models');
 const { ok } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const kycService = require('../services/kycService');
+const notificationService = require('../services/notificationService');
 
 const submitVerification = catchAsync(async (req, res) => {
   const { idType, idNumber, country, documentUrl } = req.body;
@@ -31,6 +32,7 @@ const submitVerification = catchAsync(async (req, res) => {
 
   user.kycStatus = result.verified ? 'verified' : 'rejected';
   await user.save();
+  await notificationService.notify(user._id, result.verified ? 'kyc_verified' : 'kyc_rejected');
 
   return ok(res, { user, kycResult: result });
 });

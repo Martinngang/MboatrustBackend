@@ -2,7 +2,7 @@
 // GET /projects/:projectId/bids-with-scores (matchingController.js, added
 // by the fraud/matching guide) — not duplicated here as a second
 // /bids/compare route, since that would just be the same feature twice.
-const { Bid, Project, Contract, User, Escrow } = require('../models');
+const { Bid, Project, Contract, User, Escrow, TeamMember } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
@@ -13,6 +13,17 @@ function isAdmin(user) {
   return user.roles?.some((r) => r.roleType === 'admin');
 }
 
+/** Contractor ids of every contractor `req.user` is an active
+ * 'submit_milestones' team delegate for (see TeamMember.js) — empty for
+ * everyone who isn't delegated to submit milestones on someone else's
+ * behalf. Shared by scopeToParty's security scope and getAll's own
+ * contractorId query-param handling below, so both agree on who counts as
+ * "acting as" a given contractor. */
+async function myDelegatedForIds(userId) {
+  const rows = await TeamMember.find({ userId, status: 'active', permissions: 'submit_milestones' }).select('ownerId').lean();
+  return rows.map((r) => r.ownerId);
+}
+
 /** A bid is private between the contractor who placed it and the funder who
  * owns the tender it's on — the raw Bid collection has no ownership check
  * of its own the way GET /projects/:id/bids-with-scores does, so without
@@ -20,11 +31,20 @@ function isAdmin(user) {
  * notes on any tender by projectId, or another contractor's bids by
  * contractorId. $and'd with whatever filter the client actually asked for,
  * so every existing legitimate query shape (mine as contractor, or on a
- * tender I own) keeps working unchanged. */
-async function scopeToParty(req, clientFilter) {
+ * tender I own) keeps working unchanged. `delegatedForIds` widens "mine" to
+ * also cover any contractor this caller is an active milestone delegate
+ * for, so a delegate's own MyBidsScreen/ContractDetailScreen query (which
+ * always sends `contractorId: user._id`) can surface the delegated
+ * contractor's bids too — see getAll below. */
+async function scopeToParty(req, clientFilter, delegatedForIds = []) {
   if (isAdmin(req.user)) return clientFilter;
   const myProjects = await Project.find({ ownerId: req.user._id }).select('_id').lean();
-  const partyOr = { $or: [{ contractorId: req.user._id }, { projectId: { $in: myProjects.map((p) => p._id) } }] };
+  const partyOr = {
+    $or: [
+      { contractorId: { $in: [req.user._id, ...delegatedForIds] } },
+      { projectId: { $in: myProjects.map((p) => p._id) } },
+    ],
+  };
   return Object.keys(clientFilter).length > 0 ? { $and: [clientFilter, partyOr] } : partyOr;
 }
 
@@ -32,9 +52,20 @@ const getAll = catchAsync(async (req, res) => {
   const { page = 1, limit = 20, projectId, contractorId, status } = req.query;
   const clientFilter = {};
   if (projectId) clientFilter.projectId = projectId;
-  if (contractorId) clientFilter.contractorId = contractorId;
+  let delegatedForIds = [];
+  if (contractorId) {
+    // Only expand when the caller is asking for their OWN contractorId
+    // (the shape every real screen sends) — an admin or funder filtering by
+    // some other contractor's id gets exactly that contractor, unexpanded.
+    if (String(contractorId) === String(req.user._id)) {
+      delegatedForIds = await myDelegatedForIds(req.user._id);
+      clientFilter.contractorId = delegatedForIds.length > 0 ? { $in: [contractorId, ...delegatedForIds] } : contractorId;
+    } else {
+      clientFilter.contractorId = contractorId;
+    }
+  }
   if (status) clientFilter.status = status;
-  const filter = await scopeToParty(req, clientFilter);
+  const filter = await scopeToParty(req, clientFilter, delegatedForIds);
 
   const [items, total] = await Promise.all([
     Bid.find(filter)
@@ -227,4 +258,24 @@ const updateStatus = catchAsync(async (req, res) => {
   return ok(res, { bid, contract });
 });
 
-module.exports = { getAll, getOne, create, counter, updateStatus };
+/**
+ * How many live bids a tender has — a single integer, never any bid
+ * contents. Deliberately NOT run through scopeToParty the way getAll is:
+ * that scope exists because getAll returns the bids themselves, and it has
+ * the side effect that a contractor browsing someone else's tender always
+ * saw a count of 0 (they're party to none of those bids), which is exactly
+ * the competition signal the browse screen is meant to show. An aggregate
+ * count leaks nothing about who bid or for how much, so it's safe for any
+ * signed-in user to read.
+ *
+ * Counts only bids still standing — 'withdrawn' and 'rejected' bids aren't
+ * competition any more, so including them would overstate the field.
+ */
+const getCountForProject = catchAsync(async (req, res) => {
+  const { projectId } = req.query;
+  if (!projectId) throw ApiError.badRequest('projectId is required');
+  const count = await Bid.countDocuments({ projectId, status: { $in: ['submitted', 'accepted'] } });
+  return ok(res, { count });
+});
+
+module.exports = { getAll, getOne, create, counter, updateStatus, getCountForProject };

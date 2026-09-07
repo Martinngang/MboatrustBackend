@@ -98,6 +98,12 @@ const update = catchAsync(async (req, res) => {
   await listing.save();
   if (isAdmin && String(listing.sellerId) !== String(req.user._id)) {
     await logAdminAction({ adminId: req.user._id, action: 'land.update', targetType: 'LandListing', targetId: listing._id, detail: { fields: Object.keys(req.body) } });
+    await notificationService.notify(
+      listing.sellerId,
+      'land_listing_edited_by_admin',
+      { title: listing.title },
+      { adminId: req.user._id, relatedAction: 'land.update', relatedType: 'LandListing', relatedId: listing._id }
+    );
   }
   return ok(res, listing);
 });
@@ -107,9 +113,16 @@ const remove = catchAsync(async (req, res) => {
   if (!listing) throw ApiError.notFound('Land listing not found');
   const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
   if (String(listing.sellerId) !== String(req.user._id) && !isAdmin) throw ApiError.forbidden();
+  const { sellerId: listingSellerId, title: listingTitle } = listing;
   await listing.deleteOne();
-  if (isAdmin && String(listing.sellerId) !== String(req.user._id)) {
-    await logAdminAction({ adminId: req.user._id, action: 'land.remove', targetType: 'LandListing', targetId: listing._id, detail: { title: listing.title } });
+  if (isAdmin && String(listingSellerId) !== String(req.user._id)) {
+    await logAdminAction({ adminId: req.user._id, action: 'land.remove', targetType: 'LandListing', targetId: listing._id, detail: { title: listingTitle } });
+    await notificationService.notify(
+      listingSellerId,
+      'land_listing_removed',
+      { title: listingTitle },
+      { adminId: req.user._id, relatedAction: 'land.remove', relatedType: 'LandListing', relatedId: listing._id }
+    );
   }
   return res.status(204).send();
 });
@@ -147,8 +160,28 @@ const updateVerificationStatus = catchAsync(async (req, res) => {
   await listing.save();
   // Only when the actor actually holds admin (this route is also reachable
   // by 'verifier', which isn't an admin action worth auditing the same way).
-  if (req.user.roles?.some((r) => r.roleType === 'admin')) {
+  const actorIsAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  if (actorIsAdmin) {
     await logAdminAction({ adminId: req.user._id, action: 'landListing.updateVerificationStatus', targetType: 'LandListing', targetId: listing._id, detail: { verificationStatus: listing.verificationStatus } });
+  }
+  // The seller cares about this outcome regardless of whether an admin or a
+  // verifier made the call — only the EmailLog admin-attribution differs.
+  // 'unverified'/'pending' are transitional states (not a real decision),
+  // so only the two terminal outcomes actually notify.
+  const decisionType = listing.verificationStatus === 'verified'
+    ? 'land_listing_verified'
+    : listing.verificationStatus === 'flagged'
+      ? 'land_listing_verification_rejected'
+      : null;
+  if (decisionType) {
+    await notificationService.notify(
+      listing.sellerId,
+      decisionType,
+      { title: listing.title },
+      actorIsAdmin
+        ? { adminId: req.user._id, relatedAction: 'landListing.updateVerificationStatus', relatedType: 'LandListing', relatedId: listing._id }
+        : {}
+    );
   }
   return ok(res, listing);
 });

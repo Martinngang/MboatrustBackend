@@ -3,6 +3,7 @@ const ApiError = require('../utils/ApiError');
 const { ok } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const { logAdminAction } = require('../services/adminActionLogService');
+const notificationService = require('../services/notificationService');
 
 const getAll = catchAsync(async (req, res) => {
   const admins = await User.find({ 'roles.roleType': 'admin' })
@@ -32,6 +33,12 @@ const setPermissions = catchAsync(async (req, res) => {
     targetId: target._id,
     detail: { permissions },
   });
+  await notificationService.notify(
+    target._id,
+    'admin_permissions_changed',
+    {},
+    { adminId: req.user._id, relatedAction: 'admin.setPermissions', relatedType: 'User', relatedId: target._id }
+  );
 
   return ok(res, {
     id: target._id,

@@ -3,6 +3,7 @@ const ApiError = require('../utils/ApiError');
 const { ok } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const { logAdminAction } = require('../services/adminActionLogService');
+const notificationService = require('../services/notificationService');
 const storageService = require('../services/storageService');
 const { getStats } = require('../services/contractorStatsService');
 const { getLeaderboard: computeLeaderboard } = require('../services/contractorLeaderboardService');
@@ -243,6 +244,12 @@ const adminUpsert = catchAsync(async (req, res) => {
     { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
   );
   await logAdminAction({ adminId: req.user._id, action: 'contractorProfile.adminUpdate', targetType: 'ContractorProfile', targetId: profile._id, detail: { userId: req.params.userId, fields: Object.keys(req.body) } });
+  await notificationService.notify(
+    req.params.userId,
+    'contractor_profile_edited_by_admin',
+    {},
+    { adminId: req.user._id, relatedAction: 'contractorProfile.adminUpdate', relatedType: 'ContractorProfile', relatedId: profile._id }
+  );
   return ok(res, withDefaults(profile.toObject()));
 });
 

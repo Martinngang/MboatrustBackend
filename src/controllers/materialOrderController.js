@@ -2,6 +2,7 @@ const { MaterialOrder, Project, Bid, SupplierProfile } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
+const notificationService = require('../services/notificationService');
 
 async function requireMySupplierId(userId) {
   const profile = await SupplierProfile.findOne({ ownerId: userId }).select('_id');
@@ -156,6 +157,7 @@ const confirm = catchAsync(async (req, res) => {
   order.confirmedAt = new Date();
   await order.save();
   await withDisplay(order);
+  await notificationService.notify(order.requestedBy, 'material_order_confirmed', { orderId: order._id, totalAmount: order.totalAmount });
   return ok(res, order);
 });
 
@@ -166,6 +168,7 @@ const reject = catchAsync(async (req, res) => {
   order.rejectionReason = req.body.reason;
   await order.save();
   await withDisplay(order);
+  await notificationService.notify(order.requestedBy, 'material_order_rejected', { orderId: order._id, reason: order.rejectionReason });
   return ok(res, order);
 });
 
@@ -175,6 +178,7 @@ const markOutForDelivery = catchAsync(async (req, res) => {
   order.status = 'out_for_delivery';
   await order.save();
   await withDisplay(order);
+  await notificationService.notify(order.requestedBy, 'material_order_dispatched', { orderId: order._id });
   return ok(res, order);
 });
 
@@ -204,6 +208,8 @@ const confirmDelivery = catchAsync(async (req, res) => {
   await order.save();
   await SupplierProfile.updateOne({ _id: order.supplierId }, { $inc: { completedOrderCount: 1 } });
   await withDisplay(order);
+  const deliveredSupplier = await SupplierProfile.findById(order.supplierId).select('ownerId').lean();
+  if (deliveredSupplier) await notificationService.notify(deliveredSupplier.ownerId, 'material_order_delivered', { orderId: order._id });
   return ok(res, order);
 });
 
@@ -221,6 +227,8 @@ const cancel = catchAsync(async (req, res) => {
   order.status = 'cancelled';
   await order.save();
   await withDisplay(order);
+  const cancelledSupplier = await SupplierProfile.findById(order.supplierId).select('ownerId').lean();
+  if (cancelledSupplier) await notificationService.notify(cancelledSupplier.ownerId, 'material_order_cancelled', { orderId: order._id });
   return ok(res, order);
 });
 

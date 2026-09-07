@@ -1,8 +1,10 @@
-const { TeamMember, User } = require('../models');
+const { TeamMember, TeamActivityLog, User } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const { logAdminAction } = require('../services/adminActionLogService');
+const { logTeamActivity } = require('../services/teamActivityLogService');
+const notificationService = require('../services/notificationService');
 
 /** Every roster row is implicitly scoped to req.user._id as the owner —
  * there's no route param for "whose team," so a caller can only ever
@@ -30,7 +32,7 @@ const getMine = catchAsync(async (req, res) => {
  * — otherwise the row waits in 'invited' status until that person signs up
  * and calls claim. */
 const invite = catchAsync(async (req, res) => {
-  const { email, name, role } = req.body;
+  const { email, name, role, permissions } = req.body;
   const existing = await TeamMember.findOne({ ownerId: req.user._id, invitedEmail: email.toLowerCase() });
   if (existing) throw ApiError.conflict('Already invited');
 
@@ -41,7 +43,16 @@ const invite = catchAsync(async (req, res) => {
     invitedEmail: email.toLowerCase(),
     invitedName: name || matchedUser?.fullName || '',
     role,
+    permissions: permissions || [],
     status: matchedUser ? 'active' : 'invited',
+  });
+  await logTeamActivity({
+    ownerId: req.user._id,
+    actorId: req.user._id,
+    action: 'member.invited',
+    targetType: 'TeamMember',
+    targetId: member._id,
+    detail: { email: member.invitedEmail, role, permissions: member.permissions },
   });
   return created(res, member);
 });
@@ -85,10 +96,29 @@ function assertOwnsAndNotSelf(member, req) {
 const updateRole = catchAsync(async (req, res) => {
   const member = await TeamMember.findById(req.params.id);
   const asAdmin = assertOwnsAndNotSelf(member, req);
-  member.role = req.body.role;
+  const { role, permissions } = req.body;
+  if (role !== undefined) member.role = role;
+  if (permissions !== undefined) member.permissions = permissions;
   await member.save();
   if (asAdmin) {
-    await logAdminAction({ adminId: req.user._id, action: 'teamMember.updateRole', targetType: 'TeamMember', targetId: member._id, detail: { ownerId: member.ownerId, role: req.body.role } });
+    await logAdminAction({ adminId: req.user._id, action: 'teamMember.updateRole', targetType: 'TeamMember', targetId: member._id, detail: { ownerId: member.ownerId, role, permissions } });
+    if (member.userId) {
+      await notificationService.notify(
+        member.userId,
+        'team_member_role_changed_by_admin',
+        { role },
+        { adminId: req.user._id, relatedAction: 'teamMember.updateRole', relatedType: 'TeamMember', relatedId: member._id }
+      );
+    }
+  } else {
+    await logTeamActivity({
+      ownerId: member.ownerId,
+      actorId: req.user._id,
+      action: 'member.permissionsChanged',
+      targetType: 'TeamMember',
+      targetId: member._id,
+      detail: { role, permissions },
+    });
   }
   return ok(res, member);
 });
@@ -96,11 +126,42 @@ const updateRole = catchAsync(async (req, res) => {
 const remove = catchAsync(async (req, res) => {
   const member = await TeamMember.findById(req.params.id);
   const asAdmin = assertOwnsAndNotSelf(member, req);
+  const { userId: memberUserId, ownerId, invitedEmail } = member;
   await member.deleteOne();
   if (asAdmin) {
-    await logAdminAction({ adminId: req.user._id, action: 'teamMember.remove', targetType: 'TeamMember', targetId: member._id, detail: { ownerId: member.ownerId } });
+    await logAdminAction({ adminId: req.user._id, action: 'teamMember.remove', targetType: 'TeamMember', targetId: member._id, detail: { ownerId } });
+    if (memberUserId) {
+      await notificationService.notify(
+        memberUserId,
+        'team_member_removed_by_admin',
+        {},
+        { adminId: req.user._id, relatedAction: 'teamMember.remove', relatedType: 'TeamMember', relatedId: member._id }
+      );
+    }
+  } else {
+    await logTeamActivity({
+      ownerId,
+      actorId: req.user._id,
+      action: 'member.removed',
+      targetType: 'TeamMember',
+      targetId: member._id,
+      detail: { email: invitedEmail },
+    });
   }
   return res.status(204).send();
 });
 
-module.exports = { getMine, getAll, invite, claim, updateRole, remove };
+/** A contractor's own durable history of who invited/changed/removed whom,
+ * and which delegate submitted evidence on their behalf — see
+ * services/teamActivityLogService.js. Owner-scoped the same way getMine is;
+ * an admin has no reason to browse this (they have AdminActionLog for their
+ * own actions on this roster instead). */
+const getActivity = catchAsync(async (req, res) => {
+  const items = await TeamActivityLog.find({ ownerId: req.user._id })
+    .populate('actorId', 'fullName')
+    .sort('-createdAt')
+    .limit(200);
+  return ok(res, items);
+});
+
+module.exports = { getMine, getAll, invite, claim, updateRole, remove, getActivity };

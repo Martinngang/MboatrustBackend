@@ -40,11 +40,15 @@ router.use('/inventory-items', require('./inventoryItemRoutes'));
 router.use('/material-orders', require('./materialOrderRoutes'));
 router.use('/admin/system-health', require('./systemHealthRoutes'));
 router.use('/admin/activity', require('./adminActivityRoutes'));
+router.use('/admin/email-logs', require('./adminEmailLogRoutes'));
+router.use('/admin/smtp-settings', require('./adminSmtpSettingsRoutes'));
 router.use('/admin', require('./adminCommunityRoutes'));
 router.use('/admin/conversations', require('./adminConversationRoutes'));
 router.use('/admin/notifications', require('./adminNotificationRoutes'));
 router.use('/admin/admins', require('./adminAccountRoutes'));
 router.use('/system-events', require('./systemEventRoutes'));
 router.use('/activity', require('./activityRoutes'));
+router.use('/support-tickets', require('./supportTicketRoutes'));
+router.use('/help-articles', require('./helpArticleRoutes'));
 
 module.exports = router;

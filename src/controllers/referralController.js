@@ -3,6 +3,7 @@ const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const { logAdminAction } = require('../services/adminActionLogService');
+const notificationService = require('../services/notificationService');
 
 const getMine = catchAsync(async (req, res) => {
   const referrals = await Referral.find({ referrerId: req.user._id }).populate('referredId', 'fullName').sort('-createdAt');
@@ -50,8 +51,15 @@ const claim = catchAsync(async (req, res) => {
 const remove = catchAsync(async (req, res) => {
   const referral = await Referral.findById(req.params.id);
   if (!referral) throw ApiError.notFound('Referral not found');
+  const { referrerId } = referral;
   await referral.deleteOne();
-  await logAdminAction({ adminId: req.user._id, action: 'referral.remove', targetType: 'Referral', targetId: referral._id, detail: { referrerId: referral.referrerId } });
+  await logAdminAction({ adminId: req.user._id, action: 'referral.remove', targetType: 'Referral', targetId: referral._id, detail: { referrerId } });
+  await notificationService.notify(
+    referrerId,
+    'referral_removed',
+    {},
+    { adminId: req.user._id, relatedAction: 'referral.remove', relatedType: 'Referral', relatedId: referral._id }
+  );
   return res.status(204).send();
 });
 

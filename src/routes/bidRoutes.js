@@ -8,6 +8,8 @@ const { createBid, updateBidStatus, counterBid } = require('../validators/bidVal
 const router = Router();
 
 router.get('/', authenticate, bidController.getAll);
+// MUST stay above '/:id' — otherwise Express matches "count" as an id.
+router.get('/count', authenticate, bidController.getCountForProject);
 router.get('/:id', authenticate, bidController.getOne);
 router.post('/', authenticate, requireRole('contractor'), validate(createBid), bidController.create);
 router.post('/:id/counter', authenticate, validate(counterBid), bidController.counter);

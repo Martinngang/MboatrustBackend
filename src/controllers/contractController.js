@@ -1,4 +1,4 @@
-const { Contract, Project, Bid } = require('../models');
+const { Contract, Project, Bid, TeamMember } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
@@ -23,6 +23,15 @@ async function assertParty(contract, user) {
   }
 }
 
+/** Contractor ids of every contractor `userId` is an active
+ * 'submit_milestones' team delegate for — see the identical helper in
+ * bidController.js, which this mirrors so a delegate's contract visibility
+ * matches their bid visibility exactly. */
+async function myDelegatedForIds(userId) {
+  const rows = await TeamMember.find({ userId, status: 'active', permissions: 'submit_milestones' }).select('ownerId').lean();
+  return rows.map((r) => r.ownerId);
+}
+
 /** A signed contract's generated text is private between its two real
  * parties — Contract has no direct owner/contractor field (only
  * projectId/bidId), so scoping means first resolving which projects the
@@ -38,17 +47,27 @@ const getAll = catchAsync(async (req, res) => {
   if (status) filter.status = status;
   // Contract has no direct contractor field (only bidId) — same
   // resolve-via-Bid join assertParty uses, exposed as a filter for the
-  // admin contractor-detail view.
+  // admin contractor-detail view. Expanded to include delegated-for
+  // contractors only when the caller is asking for their own id (the shape
+  // ContractDetailScreen actually sends) — see bidController.getAll's
+  // identical comment.
+  let delegatedForIds = [];
   if (contractorId) {
-    const theirBids = await Bid.find({ contractorId }).select('_id').lean();
+    let contractorIds = [contractorId];
+    if (String(contractorId) === String(req.user._id)) {
+      delegatedForIds = await myDelegatedForIds(req.user._id);
+      contractorIds = [contractorId, ...delegatedForIds];
+    }
+    const theirBids = await Bid.find({ contractorId: { $in: contractorIds } }).select('_id').lean();
     filter.bidId = { $in: theirBids.map((b) => b._id) };
   }
 
   const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
   if (!isAdmin) {
+    if (delegatedForIds.length === 0) delegatedForIds = await myDelegatedForIds(req.user._id);
     const [myProjects, myBids] = await Promise.all([
       Project.find({ ownerId: req.user._id }).select('_id').lean(),
-      Bid.find({ contractorId: req.user._id }).select('_id').lean(),
+      Bid.find({ contractorId: { $in: [req.user._id, ...delegatedForIds] } }).select('_id').lean(),
     ]);
     filter.$or = [
       { projectId: { $in: myProjects.map((p) => p._id) } },
@@ -104,6 +123,21 @@ const terminate = catchAsync(async (req, res) => {
 
   contract.status = 'terminated';
   await contract.save();
+
+  // Both real parties should know, same as markCompleted's rating_prompt
+  // fan-out above — admin attribution on the EmailLog only when the actor
+  // genuinely is an admin (this route is also reachable by either party).
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  const meta = isAdmin
+    ? { adminId: req.user._id, relatedAction: 'contract.terminate', relatedType: 'Contract', relatedId: contract._id }
+    : {};
+  const [project, bid] = await Promise.all([
+    Project.findById(contract.projectId).select('ownerId title').lean(),
+    Bid.findById(contract.bidId).select('contractorId').lean(),
+  ]);
+  if (project) await notificationService.notify(project.ownerId, 'contract_terminated', { projectTitle: project.title }, meta);
+  if (bid) await notificationService.notify(bid.contractorId, 'contract_terminated', { projectTitle: project?.title }, meta);
+
   return ok(res, contract);
 });
 
@@ -125,10 +159,24 @@ const adminCreate = catchAsync(async (req, res) => {
   return created(res, contract);
 });
 
+/** Notifies both real parties of an admin edit/removal — resolved fresh via
+ * the contract's projectId/bidId, same join assertParty uses, since Contract
+ * itself carries no direct owner/contractor field. */
+async function notifyContractParties(contract, type, adminId, relatedAction) {
+  const [project, bid] = await Promise.all([
+    Project.findById(contract.projectId).select('ownerId').lean(),
+    Bid.findById(contract.bidId).select('contractorId').lean(),
+  ]);
+  const meta = { adminId, relatedAction, relatedType: 'Contract', relatedId: contract._id };
+  if (project) await notificationService.notify(project.ownerId, type, {}, meta);
+  if (bid) await notificationService.notify(bid.contractorId, type, {}, meta);
+}
+
 const adminUpdate = catchAsync(async (req, res) => {
   const contract = await Contract.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
   if (!contract) throw ApiError.notFound('Contract not found');
   await logAdminAction({ adminId: req.user._id, action: 'contract.update', targetType: 'Contract', targetId: contract._id, detail: { fields: Object.keys(req.body) } });
+  await notifyContractParties(contract, 'contract_edited_or_removed_by_admin', req.user._id, 'contract.update');
   return ok(res, contract);
 });
 
@@ -136,6 +184,7 @@ const adminRemove = catchAsync(async (req, res) => {
   const contract = await Contract.findByIdAndDelete(req.params.id);
   if (!contract) throw ApiError.notFound('Contract not found');
   await logAdminAction({ adminId: req.user._id, action: 'contract.remove', targetType: 'Contract', targetId: req.params.id, detail: { projectId: contract.projectId } });
+  await notifyContractParties(contract, 'contract_edited_or_removed_by_admin', req.user._id, 'contract.remove');
   return res.status(204).send();
 });
 

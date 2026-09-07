@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { Project, Escrow, Dispute, Bid, RiskFlag, User, SupplierProfile, MaterialOrder } = require('../models');
+const { Project, Escrow, Dispute, Bid, RiskFlag, User, SupplierProfile, MaterialOrder, TeamMember } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
@@ -13,6 +13,7 @@ const geocodingService = require('../services/geocodingService');
 const referralService = require('../services/referralService');
 const escrowAnomalyService = require('../services/escrowAnomalyService');
 const { logAdminAction } = require('../services/adminActionLogService');
+const { logTeamActivity } = require('../services/teamActivityLogService');
 
 const getAll = catchAsync(async (req, res) => {
   const { page = 1, limit = 20, projectType, status, ownerId, funderId, search } = req.query;
@@ -54,7 +55,10 @@ const getOne = catchAsync(async (req, res) => {
   const project = await Project.findById(req.params.id)
     .populate('ownerId', 'fullName')
     .populate('coSignerId', 'fullName')
-    .populate('milestones.approvers.userId', 'fullName');
+    .populate('milestones.approvers.userId', 'fullName')
+    // Lets the funder tell a delegate's submission apart from the
+    // contractor's own — see submitEvidence's TeamMember delegate check.
+    .populate('milestones.evidence.submittedBy', 'fullName');
   if (!project) throw ApiError.notFound('Project not found');
   return ok(res, project);
 });
@@ -302,6 +306,7 @@ async function releaseMilestoneEscrow(project, milestone) {
   // producing a valid, historically-consistent payeeType.
   let payeeType = project.projectType === 'tender' ? 'contractor' : 'recipient';
   let payeeSupplierId = null;
+  let payeeSupplierOwnerId = null;
   let payoutProvider = 'mtn_momo';
   let payeePhoneNumber = null;
   let payoutMethodId = null;
@@ -310,10 +315,11 @@ async function releaseMilestoneEscrow(project, milestone) {
     status: { $in: ['confirmed', 'out_for_delivery', 'delivered'] },
   }).select('supplierId');
   if (materialsOrder) {
-    const supplier = await SupplierProfile.findById(materialsOrder.supplierId).select('paymentProvider payoutPhoneNumber');
+    const supplier = await SupplierProfile.findById(materialsOrder.supplierId).select('ownerId paymentProvider payoutPhoneNumber');
     if (supplier) {
       payeeType = 'supplier';
       payeeSupplierId = supplier._id;
+      payeeSupplierOwnerId = supplier.ownerId;
       payoutProvider = supplier.paymentProvider;
       payeePhoneNumber = supplier.payoutPhoneNumber || null;
     }
@@ -383,6 +389,23 @@ async function releaseMilestoneEscrow(project, milestone) {
   }
 
   milestone.status = 'released';
+
+  // Whoever actually received the disbursement — the funder only ever
+  // learns their own milestone *decision* went through (see the
+  // milestone_decision notify() in decideApproval below), never that money
+  // actually landed in the payee's hands, which is the more important half
+  // of this event for a contractor/supplier.
+  const payeeUserId = payeeType === 'supplier' ? payeeSupplierOwnerId : payeeType === 'contractor' ? contractorId : project.ownerId;
+  if (payeeUserId) {
+    await notificationService.notify(payeeUserId, 'milestone_payout_received', {
+      projectId: project._id,
+      milestoneId: milestone._id,
+      milestoneTitle: milestone.title,
+      amount: fee.netAmount,
+      currency: payoutCurrency,
+    });
+  }
+
   return escrow;
 }
 
@@ -391,7 +414,7 @@ const submitEvidence = catchAsync(async (req, res) => {
   const { id, milestoneId } = req.params;
   const project = await Project.findById(id);
   if (!project) throw ApiError.notFound('Project not found');
-  await assertProjectParty(project, req.user._id);
+  const party = await assertProjectParty(project, req.user._id, { allowDelegate: true });
   const milestone = project.milestones.id(milestoneId);
   if (!milestone) throw ApiError.notFound('Milestone not found');
   // 'under_review' is included because a milestone's status flips there as
@@ -494,9 +517,25 @@ const submitEvidence = catchAsync(async (req, res) => {
     }
   }
 
+  let submitterName = null;
+  if (party.via === 'delegate') {
+    const submitter = await User.findById(req.user._id).select('fullName').lean();
+    submitterName = submitter?.fullName || null;
+    await logTeamActivity({
+      ownerId: party.contractorId,
+      actorId: req.user._id,
+      action: 'milestone.submittedOnBehalf',
+      targetType: 'Project',
+      targetId: project._id,
+      detail: { milestoneId, milestoneName: milestone.name },
+    });
+  }
+
   await notificationService.notify(project.ownerId, 'milestone_evidence_submitted', {
     projectId: project._id,
     milestoneId,
+    milestoneName: milestone.name,
+    submittedByName: submitterName,
   });
 
   return created(res, project);
@@ -711,14 +750,32 @@ const decideApproval = catchAsync(async (req, res) => {
  * (tender-only) the contractor whose bid was accepted? Shared by
  * disputeMilestone and requestMilestoneChanges — neither previously checked
  * this at all, which let any authenticated stranger dispute or send back a
- * project they had nothing to do with. */
-async function assertProjectParty(project, userId) {
+ * project they had nothing to do with.
+ *
+ * `{ allowDelegate: true }` (submitEvidence only) additionally lets in a
+ * contractor's team member with the 'submit_milestones' permission — see
+ * TeamMember.js. Deliberately not honored by dispute/change-request or any
+ * other project action, so a delegate's access never silently grows beyond
+ * exactly what it was granted for. Returns which path matched so callers
+ * that need to tell a delegate's own submission apart from the contractor's
+ * (attribution, notifications, audit log) can do so without re-querying. */
+async function assertProjectParty(project, userId, { allowDelegate = false } = {}) {
   const uid = String(userId);
-  if (String(project.ownerId) === uid) return;
-  if (project.coSignerId && String(project.coSignerId) === uid) return;
+  if (String(project.ownerId) === uid) return { via: 'owner' };
+  if (project.coSignerId && String(project.coSignerId) === uid) return { via: 'cosigner' };
+  let acceptedBid = null;
   if (project.projectType === 'tender') {
-    const acceptedBid = await Bid.findOne({ projectId: project._id, status: 'accepted', contractorId: userId }).select('_id').lean();
-    if (acceptedBid) return;
+    acceptedBid = await Bid.findOne({ projectId: project._id, status: 'accepted' }).select('contractorId').lean();
+    if (acceptedBid && String(acceptedBid.contractorId) === uid) return { via: 'contractor' };
+  }
+  if (allowDelegate && acceptedBid) {
+    const isDelegate = await TeamMember.exists({
+      ownerId: acceptedBid.contractorId,
+      userId,
+      status: 'active',
+      permissions: 'submit_milestones',
+    });
+    if (isDelegate) return { via: 'delegate', contractorId: acceptedBid.contractorId };
   }
   throw ApiError.forbidden('Not authorized to act on this project');
 }

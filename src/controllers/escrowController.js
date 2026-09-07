@@ -6,6 +6,7 @@ const feeService = require('../services/feeService');
 const paymentService = require('../services/paymentService');
 const escrowAnomalyService = require('../services/escrowAnomalyService');
 const { logAdminAction } = require('../services/adminActionLogService');
+const notificationService = require('../services/notificationService');
 
 // Transactions are their own collection (not embedded in Project) so admin
 // revenue reports and per-user transaction history can query independently.
@@ -189,6 +190,14 @@ const refund = catchAsync(async (req, res) => {
     targetId: refundEscrow._id,
     detail: { originalEscrowId: original._id, projectId: original.projectId, netAmount: fee.netAmount, currency: original.currency },
   });
+  if (project) {
+    await notificationService.notify(
+      project.ownerId,
+      'escrow_refunded',
+      { projectTitle: project.title, amount: fee.netAmount, currency: original.currency },
+      { adminId: req.user._id, relatedAction: 'escrow.refund', relatedType: 'Escrow', relatedId: refundEscrow._id }
+    );
+  }
 
   return created(res, refundEscrow);
 });
@@ -244,6 +253,19 @@ const adminCreate = catchAsync(async (req, res) => {
   return created(res, escrow);
 });
 
+/** Best-effort resolution of "whose money this ledger row concerns" — a
+ * direct contractorId/funderId when the Escrow carries one, otherwise the
+ * funding project's owner (every Escrow has a projectId, every Project has
+ * an ownerId, so this always resolves to someone real). Supplier-payee
+ * escrows fall back to the project owner too rather than resolving through
+ * SupplierProfile — a rarer combination not worth the extra query here. */
+async function resolveEscrowAffectedUser(escrow) {
+  if (escrow.contractorId) return escrow.contractorId;
+  if (escrow.funderId) return escrow.funderId;
+  const project = await Project.findById(escrow.projectId).select('ownerId').lean();
+  return project?.ownerId || null;
+}
+
 /** Admin-only edit, restricted to status/amount/currency/providerReference
  * — never the identity/linkage fields (projectId, milestoneId, type,
  * contractorId, funderId), which the validator already excludes. */
@@ -252,14 +274,32 @@ const adminUpdate = catchAsync(async (req, res) => {
   const escrow = await Escrow.findByIdAndUpdate(req.params.id, fields, { new: true, runValidators: true });
   if (!escrow) throw ApiError.notFound('Escrow transaction not found');
   await logAdminAction({ adminId: req.user._id, action: 'escrow.update', targetType: 'Escrow', targetId: escrow._id, detail: { reason, fields: Object.keys(fields) } });
+  const affectedUserId = await resolveEscrowAffectedUser(escrow);
+  if (affectedUserId) {
+    await notificationService.notify(
+      affectedUserId,
+      'escrow_updated_by_admin',
+      {},
+      { adminId: req.user._id, relatedAction: 'escrow.update', relatedType: 'Escrow', relatedId: escrow._id }
+    );
+  }
   return ok(res, escrow);
 });
 
 const adminRemove = catchAsync(async (req, res) => {
   const escrow = await Escrow.findById(req.params.id);
   if (!escrow) throw ApiError.notFound('Escrow transaction not found');
+  const affectedUserId = await resolveEscrowAffectedUser(escrow);
   await escrow.deleteOne();
   await logAdminAction({ adminId: req.user._id, action: 'escrow.remove', targetType: 'Escrow', targetId: req.params.id, detail: { reason: req.body.reason, projectId: escrow.projectId, type: escrow.type, netAmount: escrow.netAmount } });
+  if (affectedUserId) {
+    await notificationService.notify(
+      affectedUserId,
+      'escrow_removed',
+      {},
+      { adminId: req.user._id, relatedAction: 'escrow.remove', relatedType: 'Escrow', relatedId: req.params.id }
+    );
+  }
   return res.status(204).send();
 });
 

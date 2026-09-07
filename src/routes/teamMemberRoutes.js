@@ -7,6 +7,7 @@ const { invite, updateRole } = require('../validators/teamMemberValidators');
 const router = Router();
 
 router.get('/mine', authenticate, controller.getMine);
+router.get('/activity', authenticate, controller.getActivity);
 router.post('/', authenticate, validate(invite), controller.invite);
 router.post('/claim', authenticate, controller.claim);
 router.patch('/:id/role', authenticate, validate(updateRole), controller.updateRole);

@@ -96,24 +96,30 @@ const resolve = catchAsync(async (req, res) => {
   dispute.resolutionNotes = req.body.resolutionNotes;
   await dispute.save();
 
-  if (dispute.status === 'resolved') {
-    const project = await Project.findById(dispute.projectId);
-    if (project) {
-      if (dispute.milestoneId) {
-        const milestone = project.milestones.id(dispute.milestoneId);
-        if (milestone && milestone.status === 'disputed') milestone.status = 'under_review';
-      }
-      if (project.status === 'disputed') project.status = 'in_progress';
-      await project.save();
+  const project = await Project.findById(dispute.projectId);
+  if (dispute.status === 'resolved' && project) {
+    if (dispute.milestoneId) {
+      const milestone = project.milestones.id(dispute.milestoneId);
+      if (milestone && milestone.status === 'disputed') milestone.status = 'under_review';
     }
+    if (project.status === 'disputed') project.status = 'in_progress';
+    await project.save();
   }
 
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  const meta = isAdmin
+    ? { adminId: req.user._id, relatedAction: 'dispute.resolve', relatedType: 'Dispute', relatedId: dispute._id }
+    : {};
+  const payload = { disputeId: dispute._id, projectId: dispute.projectId, status: dispute.status };
+
   if (String(dispute.raisedBy) !== String(req.user._id)) {
-    await notificationService.notify(dispute.raisedBy, 'dispute_resolved', {
-      disputeId: dispute._id,
-      projectId: dispute.projectId,
-      status: dispute.status,
-    });
+    await notificationService.notify(dispute.raisedBy, 'dispute_resolved', payload, meta);
+  }
+  // The counterparty (the project owner, when they didn't raise this
+  // dispute themselves) previously never learned it was resolved at all —
+  // a real gap, since they're just as much a party to it as the raiser.
+  if (project && String(project.ownerId) !== String(dispute.raisedBy) && String(project.ownerId) !== String(req.user._id)) {
+    await notificationService.notify(project.ownerId, 'dispute_resolved_counterparty', payload, meta);
   }
 
   await logAdminAction({

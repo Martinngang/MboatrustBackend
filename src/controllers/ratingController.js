@@ -4,6 +4,7 @@ const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const { logAdminAction } = require('../services/adminActionLogService');
+const notificationService = require('../services/notificationService');
 
 const getAll = catchAsync(async (req, res) => {
   const { page = 1, limit = 20, toUserId, projectId, roleContext } = req.query;
@@ -30,8 +31,15 @@ const getAll = catchAsync(async (req, res) => {
 const remove = catchAsync(async (req, res) => {
   const rating = await Rating.findById(req.params.id);
   if (!rating) throw ApiError.notFound('Rating not found');
+  const { toUserId, score } = rating;
   await rating.deleteOne();
-  await logAdminAction({ adminId: req.user._id, action: 'rating.remove', targetType: 'Rating', targetId: rating._id, detail: { toUserId: rating.toUserId, score: rating.score } });
+  await logAdminAction({ adminId: req.user._id, action: 'rating.remove', targetType: 'Rating', targetId: rating._id, detail: { toUserId, score } });
+  await notificationService.notify(
+    toUserId,
+    'rating_removed_by_admin',
+    {},
+    { adminId: req.user._id, relatedAction: 'rating.remove', relatedType: 'Rating', relatedId: rating._id }
+  );
   return res.status(204).send();
 });
 
@@ -68,6 +76,12 @@ const adminUpdate = catchAsync(async (req, res) => {
   const rating = await Rating.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
   if (!rating) throw ApiError.notFound('Rating not found');
   await logAdminAction({ adminId: req.user._id, action: 'rating.update', targetType: 'Rating', targetId: rating._id, detail: { fields: Object.keys(req.body) } });
+  await notificationService.notify(
+    rating.toUserId,
+    'rating_edited_by_admin',
+    {},
+    { adminId: req.user._id, relatedAction: 'rating.update', relatedType: 'Rating', relatedId: rating._id }
+  );
   return ok(res, rating);
 });
 

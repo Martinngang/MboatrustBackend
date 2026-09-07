@@ -4,6 +4,7 @@ const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const storageService = require('../services/storageService');
 const { logAdminAction } = require('../services/adminActionLogService');
+const notificationService = require('../services/notificationService');
 
 /** Admin review queue — every contractor's certifications, not just one
  * user's (getMine/getForUser). Optional `verified`/`rejected` filters so the
@@ -57,6 +58,12 @@ const update = catchAsync(async (req, res) => {
   await cert.save();
   if (isAdmin && !isOwner) {
     await logAdminAction({ adminId: req.user._id, action: 'contractorCertification.update', targetType: 'ContractorCertification', targetId: cert._id, detail: { userId: cert.userId, fields: Object.keys(req.body) } });
+    await notificationService.notify(
+      cert.userId,
+      'contractor_certification_edited_by_admin',
+      { title: cert.title },
+      { adminId: req.user._id, relatedAction: 'contractorCertification.update', relatedType: 'ContractorCertification', relatedId: cert._id }
+    );
   }
   return ok(res, cert);
 });
@@ -67,9 +74,16 @@ const remove = catchAsync(async (req, res) => {
   const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
   const isOwner = String(cert.userId) === String(req.user._id);
   if (!isOwner && !isAdmin) throw ApiError.forbidden();
+  const { userId: certOwnerId, title: certTitle } = cert;
   await cert.deleteOne();
   if (isAdmin && !isOwner) {
-    await logAdminAction({ adminId: req.user._id, action: 'contractorCertification.remove', targetType: 'ContractorCertification', targetId: cert._id, detail: { userId: cert.userId, title: cert.title } });
+    await logAdminAction({ adminId: req.user._id, action: 'contractorCertification.remove', targetType: 'ContractorCertification', targetId: cert._id, detail: { userId: certOwnerId, title: certTitle } });
+    await notificationService.notify(
+      certOwnerId,
+      'contractor_certification_removed',
+      { title: certTitle },
+      { adminId: req.user._id, relatedAction: 'contractorCertification.remove', relatedType: 'ContractorCertification', relatedId: cert._id }
+    );
   }
   return res.status(204).send();
 });
@@ -82,6 +96,12 @@ const verify = catchAsync(async (req, res) => {
   cert.rejected = false;
   await cert.save();
   await logAdminAction({ adminId: req.user._id, action: 'contractorCertification.verify', targetType: 'ContractorCertification', targetId: cert._id, detail: { userId: cert.userId } });
+  await notificationService.notify(
+    cert.userId,
+    'contractor_certification_verified',
+    { title: cert.title },
+    { adminId: req.user._id, relatedAction: 'contractorCertification.verify', relatedType: 'ContractorCertification', relatedId: cert._id }
+  );
   return ok(res, cert);
 });
 
@@ -93,6 +113,12 @@ const reject = catchAsync(async (req, res) => {
   cert.verified = false;
   await cert.save();
   await logAdminAction({ adminId: req.user._id, action: 'contractorCertification.reject', targetType: 'ContractorCertification', targetId: cert._id, detail: { userId: cert.userId } });
+  await notificationService.notify(
+    cert.userId,
+    'contractor_certification_rejected',
+    { title: cert.title },
+    { adminId: req.user._id, relatedAction: 'contractorCertification.reject', relatedType: 'ContractorCertification', relatedId: cert._id }
+  );
   return ok(res, cert);
 });
 

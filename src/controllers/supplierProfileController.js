@@ -3,6 +3,7 @@ const ApiError = require('../utils/ApiError');
 const { ok } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const { logAdminAction } = require('../services/adminActionLogService');
+const notificationService = require('../services/notificationService');
 
 const getMine = catchAsync(async (req, res) => {
   const profile = await SupplierProfile.findOne({ ownerId: req.user._id });
@@ -85,6 +86,7 @@ const approve = catchAsync(async (req, res) => {
   }
 
   await logAdminAction({ adminId: req.user._id, action: 'supplierProfile.approve', targetType: 'SupplierProfile', targetId: profile._id, detail: { ownerId: profile.ownerId } });
+  await notificationService.notify(profile.ownerId, 'supplier_application_approved', { businessName: profile.businessName });
 
   return ok(res, profile);
 });
@@ -97,6 +99,7 @@ const reject = catchAsync(async (req, res) => {
   profile.reviewedAt = new Date();
   await profile.save();
   await logAdminAction({ adminId: req.user._id, action: 'supplierProfile.reject', targetType: 'SupplierProfile', targetId: profile._id, detail: { ownerId: profile.ownerId } });
+  await notificationService.notify(profile.ownerId, 'supplier_application_rejected', { businessName: profile.businessName });
   return ok(res, profile);
 });
 

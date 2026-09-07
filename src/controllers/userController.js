@@ -7,6 +7,7 @@ const storageService = require('../services/storageService');
 const { initFirebase } = require('../config/firebase');
 const { hardDeleteUser } = require('../services/userDeletionService');
 const { logAdminAction } = require('../services/adminActionLogService');
+const notificationService = require('../services/notificationService');
 
 const crud = buildCrud(User, { searchableFilters: ['kycStatus'] });
 
@@ -120,6 +121,12 @@ const adminUpdate = catchAsync(async (req, res) => {
   const user = await User.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
   if (!user) throw ApiError.notFound('User not found');
   await logAdminAction({ adminId: req.user._id, action: 'user.update', targetType: 'User', targetId: user._id, detail: { fields: Object.keys(req.body) } });
+  await notificationService.notify(
+    user._id,
+    'account_updated_by_admin',
+    { fields: Object.keys(req.body) },
+    { adminId: req.user._id, relatedAction: 'user.update', relatedType: 'User', relatedId: user._id }
+  );
   return ok(res, user);
 });
 
@@ -163,6 +170,12 @@ const adminChangePassword = catchAsync(async (req, res) => {
     });
 
   await logAdminAction({ adminId: req.user._id, action: 'user.changePassword', targetType: 'User', targetId: user._id, detail: { email: user.email } });
+  await notificationService.notify(
+    user._id,
+    'password_changed_by_admin',
+    {},
+    { adminId: req.user._id, relatedAction: 'user.changePassword', relatedType: 'User', relatedId: user._id }
+  );
   return ok(res, { success: true });
 });
 
@@ -173,6 +186,14 @@ const adminDelete = catchAsync(async (req, res) => {
   const user = await User.findById(req.params.id);
   if (!user) throw ApiError.notFound('User not found');
   const email = user.email;
+  // Must fire before hardDeleteUser — the User document (and the email
+  // address notify() needs) won't exist to look up afterward.
+  await notificationService.notify(
+    user._id,
+    'account_deleted',
+    {},
+    { adminId: req.user._id, relatedAction: 'user.delete', relatedType: 'User', relatedId: user._id }
+  );
   const result = await hardDeleteUser(req.params.id);
   await logAdminAction({ adminId: req.user._id, action: 'user.delete', targetType: 'User', targetId: req.params.id, detail: { email } });
   return ok(res, result);
@@ -186,6 +207,12 @@ const deactivate = catchAsync(async (req, res) => {
   const user = await User.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
   if (!user) throw ApiError.notFound('User not found');
   await logAdminAction({ adminId: req.user._id, action: 'user.deactivate', targetType: 'User', targetId: user._id, detail: { email: user.email } });
+  await notificationService.notify(
+    user._id,
+    'account_deactivated',
+    {},
+    { adminId: req.user._id, relatedAction: 'user.deactivate', relatedType: 'User', relatedId: user._id }
+  );
   return ok(res, user);
 });
 
@@ -220,6 +247,12 @@ const reactivate = catchAsync(async (req, res) => {
   const user = await User.findByIdAndUpdate(req.params.id, { isActive: true }, { new: true });
   if (!user) throw ApiError.notFound('User not found');
   await logAdminAction({ adminId: req.user._id, action: 'user.reactivate', targetType: 'User', targetId: user._id, detail: { email: user.email } });
+  await notificationService.notify(
+    user._id,
+    'account_reactivated',
+    {},
+    { adminId: req.user._id, relatedAction: 'user.reactivate', relatedType: 'User', relatedId: user._id }
+  );
   return ok(res, user);
 });
 
@@ -229,6 +262,12 @@ const revokeRole = catchAsync(async (req, res) => {
   user.roles = user.roles.filter((r) => r.roleType !== req.params.roleType);
   await user.save();
   await logAdminAction({ adminId: req.user._id, action: 'user.revokeRole', targetType: 'User', targetId: user._id, detail: { roleType: req.params.roleType } });
+  await notificationService.notify(
+    user._id,
+    'role_revoked',
+    { roleType: req.params.roleType },
+    { adminId: req.user._id, relatedAction: 'user.revokeRole', relatedType: 'User', relatedId: user._id }
+  );
   return ok(res, user);
 });
 
@@ -244,6 +283,12 @@ const grantRole = catchAsync(async (req, res) => {
     user.roles.push({ roleType });
     await user.save();
     await logAdminAction({ adminId: req.user._id, action: 'user.grantRole', targetType: 'User', targetId: user._id, detail: { roleType } });
+    await notificationService.notify(
+      user._id,
+      'role_granted',
+      { roleType },
+      { adminId: req.user._id, relatedAction: 'user.grantRole', relatedType: 'User', relatedId: user._id }
+    );
   }
   return ok(res, user);
 });

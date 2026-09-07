@@ -25,6 +25,18 @@ module.exports = {
 
   mongodbUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/mboatrust',
 
+  // Symmetric key protecting secrets an admin stores through the dashboard
+  // (currently just the SMTP password — see models/SmtpSettings.js and
+  // utils/crypto.js) at rest in MongoDB. Hashed down to a 32-byte AES-256
+  // key regardless of the literal value set here, so any real passphrase
+  // works — it does not need to be pre-formatted hex. Deliberately NOT
+  // defaulted to a fixed fallback the way most of this file's other
+  // integrations are: silently falling back would mean a secret meant to be
+  // encrypted gets protected by a key every deployment of this codebase
+  // shares, which is materially worse than refusing to store it at all (see
+  // utils/crypto.js, which throws rather than degrading when this is unset).
+  settingsEncryptionKey: process.env.SETTINGS_ENCRYPTION_KEY || '',
+
   firebase: {
     serviceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '',
     serviceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || '',
@@ -80,6 +92,20 @@ module.exports = {
     partnerId: process.env.SMILE_ID_PARTNER_ID || '',
     apiKey: process.env.SMILE_ID_API_KEY || '',
     sandbox: process.env.SMILE_ID_SANDBOX !== 'false',
+  },
+
+  // Transactional email — degrades to a no-op (see mailerService.js) when
+  // unset, same convention as firebase/momo/orangeMoney above. Works with
+  // any real SMTP provider (Gmail app password, SendGrid/Mailgun/SES SMTP
+  // relay, a custom mail server) since it's just standard SMTP, not a
+  // provider-specific API.
+  smtp: {
+    host: process.env.SMTP_HOST || '',
+    port: parseInt(process.env.SMTP_PORT, 10) || 587,
+    secure: process.env.SMTP_SECURE === 'true',
+    user: process.env.SMTP_USER || '',
+    pass: process.env.SMTP_PASS || '',
+    from: process.env.EMAIL_FROM || process.env.SMTP_USER || '',
   },
 
   // Optional AI layer (Gemini) on top of the deterministic fraud checks and

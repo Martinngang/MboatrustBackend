@@ -4,6 +4,7 @@ const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const paymentService = require('../services/paymentService');
 const { logAdminAction } = require('../services/adminActionLogService');
+const notificationService = require('../services/notificationService');
 
 // Flat prices, not run through feeService.calculateFee — that service
 // deducts a fee FROM a gross amount for money already moving through the
@@ -74,6 +75,12 @@ const cancel = catchAsync(async (req, res) => {
   if (!subscription) throw ApiError.notFound('Subscription not found');
   if (isAdmin && String(subscription.userId) !== String(req.user._id)) {
     await logAdminAction({ adminId: req.user._id, action: 'subscription.forceCancel', targetType: 'Subscription', targetId: subscription._id, detail: { userId: subscription.userId } });
+    await notificationService.notify(
+      subscription.userId,
+      'subscription_force_cancelled',
+      {},
+      { adminId: req.user._id, relatedAction: 'subscription.forceCancel', relatedType: 'Subscription', relatedId: subscription._id }
+    );
   }
   return ok(res, subscription);
 });

@@ -4,6 +4,7 @@ const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const storageService = require('../services/storageService');
 const { logAdminAction } = require('../services/adminActionLogService');
+const notificationService = require('../services/notificationService');
 
 const getMine = catchAsync(async (req, res) => {
   const profile = await VerifierProfile.findOne({ userId: req.user._id });
@@ -80,6 +81,7 @@ const approve = catchAsync(async (req, res) => {
   }
 
   await logAdminAction({ adminId: req.user._id, action: 'verifierProfile.approve', targetType: 'VerifierProfile', targetId: profile._id, detail: { userId: profile.userId } });
+  await notificationService.notify(profile.userId, 'verifier_application_approved');
 
   return ok(res, profile);
 });
@@ -92,6 +94,7 @@ const reject = catchAsync(async (req, res) => {
   profile.reviewedAt = new Date();
   await profile.save();
   await logAdminAction({ adminId: req.user._id, action: 'verifierProfile.reject', targetType: 'VerifierProfile', targetId: profile._id, detail: { userId: profile.userId } });
+  await notificationService.notify(profile.userId, 'verifier_application_rejected');
   return ok(res, profile);
 });
 
@@ -108,6 +111,12 @@ const adminUpdate = catchAsync(async (req, res) => {
   );
   if (!profile) throw ApiError.notFound('Verifier profile not found');
   await logAdminAction({ adminId: req.user._id, action: 'verifierProfile.adminUpdate', targetType: 'VerifierProfile', targetId: profile._id, detail: { userId: req.params.userId, fields: Object.keys(safeFields) } });
+  await notificationService.notify(
+    req.params.userId,
+    'verifier_profile_edited_by_admin',
+    {},
+    { adminId: req.user._id, relatedAction: 'verifierProfile.adminUpdate', relatedType: 'VerifierProfile', relatedId: profile._id }
+  );
   return ok(res, profile);
 });
 

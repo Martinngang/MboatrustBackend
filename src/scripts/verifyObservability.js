@@ -80,8 +80,16 @@ async function run() {
     }
 
     // ── 3. A malformed webhook payload gets the right error AND is recorded ──
+    // Unsigned request with no real payload shape: flutterwaveWebhook checks
+    // signature *before* payload shape (see paymentWebhookController.js), so
+    // the correct response depends on whether a real FLUTTERWAVE_SECRET_KEY
+    // is configured in this environment — 401 "missing signature" once a key
+    // is set (the hardened, fail-closed path), or 400 "missing reference"
+    // when no key is configured at all (local/sandbox dev, matching every
+    // other provider's mock-tolerant convention). Both are the "correctly
+    // rejected, not silently accepted" outcome this check cares about.
     const malformedWebhook = await anon.post('/payments/flutterwave/webhook', { not: 'a real payload' });
-    record('Malformed Flutterwave webhook payload gets a 400', malformedWebhook.status === 400, `status=${malformedWebhook.status}`);
+    record('Malformed Flutterwave webhook payload is rejected (400 or 401)', malformedWebhook.status === 400 || malformedWebhook.status === 401, `status=${malformedWebhook.status}`);
     await new Promise((r) => setTimeout(r, 300));
     const webhookEvent = await SystemEvent.findOne({ type: 'webhook_error', source: 'paymentWebhookController.flutterwaveWebhook' }).sort('-createdAt').lean();
     record('Malformed webhook is recorded as a SystemEvent', Boolean(webhookEvent));

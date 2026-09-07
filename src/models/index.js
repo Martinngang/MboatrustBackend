@@ -27,6 +27,7 @@ module.exports = {
   Subscription: require('./Subscription'),
   IdempotencyKey: require('./IdempotencyKey'),
   TeamMember: require('./TeamMember'),
+  TeamActivityLog: require('./TeamActivityLog'),
   ProjectTemplate: require('./ProjectTemplate'),
   VerifierProfile: require('./VerifierProfile'),
   SupplierProfile: require('./SupplierProfile'),
@@ -34,4 +35,8 @@ module.exports = {
   MaterialOrder: require('./MaterialOrder'),
   SystemEvent: require('./SystemEvent'),
   AdminActionLog: require('./AdminActionLog'),
+  EmailLog: require('./EmailLog'),
+  SmtpSettings: require('./SmtpSettings'),
+  SupportTicket: require('./SupportTicket'),
+  HelpArticle: require('./HelpArticle'),
 };
