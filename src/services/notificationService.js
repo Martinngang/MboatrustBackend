@@ -3,6 +3,19 @@ const { initFirebase } = require('../config/firebase');
 const { categoryForType, DEFAULTS } = require('../utils/notificationCategories');
 const { sendEmail } = require('./mailerService');
 const { renderEmailHtml, contentForNotification } = require('../utils/emailTemplates');
+const { getIO } = require('./socketRegistry');
+
+/** Pushes the same event to any of this user's open screens, regardless of
+ * which one — the recipient's client maps `payload.projectId`/`bidId`/
+ * `conversationId` to the right query-cache invalidation (see
+ * api/realtime.ts on both frontends). `getIO()` is null outside a running
+ * server process (e.g. the chargeRecurringContributions.js cron script), so
+ * this is a silent no-op there rather than a crash. */
+function pushRealtime(userId, notification, type, payload) {
+  const io = getIO();
+  if (!io) return;
+  io.to(`user:${userId}`).emit('notification:new', { id: notification._id, type, payload, createdAt: notification.createdAt });
+}
 
 // Account-status decisions a person needs to know about regardless of their
 // marketing/category email toggle — the same reasoning most products apply
@@ -110,6 +123,7 @@ async function sendEmailForNotification(userId, type, payload, meta = {}) {
  */
 async function notify(userId, type, payload = {}, meta = {}) {
   const notification = await Notification.create({ userId, type, payload, read: false });
+  pushRealtime(userId, notification, type, payload);
   const category = categoryForType(type);
   const channels = await getChannelPrefs(userId, category);
   if (channels.push) await sendPush(userId, type, payload);
@@ -120,6 +134,7 @@ async function notify(userId, type, payload = {}, meta = {}) {
 async function notifyMany(userIds, type, payload = {}, extra = {}, meta = {}) {
   const docs = userIds.map((userId) => ({ userId, type, payload, read: false, ...extra }));
   const created = await Notification.insertMany(docs);
+  created.forEach((notification, i) => pushRealtime(userIds[i], notification, type, payload));
   const category = categoryForType(type);
   await Promise.all(
     userIds.map(async (userId) => {

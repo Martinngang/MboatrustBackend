@@ -7,6 +7,7 @@ const app = require('./app');
 const { resolveUser } = require('./middleware/auth');
 const { Conversation } = require('./models');
 const { bootstrapInitialAdmin } = require('./services/bootstrapAdminService');
+const { setIO } = require('./services/socketRegistry');
 
 async function main() {
   // DEV_AUTH_BYPASS trusts a client-supplied x-dev-user-id header with zero
@@ -24,6 +25,11 @@ async function main() {
 
   const server = http.createServer(app);
   const io = new Server(server, { cors: { origin: env.clientOrigins } });
+  // Lets notificationService (called from places with no `req` in scope —
+  // e.g. referralService, or the standalone chargeRecurringContributions.js
+  // cron process) reach this same io instance without threading it through
+  // every call site.
+  setIO(io);
 
   // Mirrors the HTTP `authenticate` middleware's identity resolution — the
   // client sends the same Firebase ID token (or dev-bypass user id) it
@@ -43,6 +49,10 @@ async function main() {
 
   io.on('connection', (socket) => {
     const userId = socket.data.userId;
+    // The one addressable-by-user room — everything outside messaging
+    // (bids, milestones, notifications, new tender postings) targets this
+    // room rather than needing its own conversation-style join dance.
+    socket.join(`user:${userId}`);
     const currentCount = onlineUsers.get(userId) || 0;
     onlineUsers.set(userId, currentCount + 1);
     

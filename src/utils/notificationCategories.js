@@ -32,6 +32,7 @@ const TYPE_TO_CATEGORY = {
   video_verification_requested: 'milestones',
   video_verification_scheduled: 'milestones',
   new_message: 'messages',
+  conversation_created: 'messages',
   land_offer_countered: 'land',
   land_offer_declined: 'land',
   land_offer_received: 'land',

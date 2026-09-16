@@ -95,6 +95,13 @@ const create = catchAsync(async (req, res) => {
     status: 'open',
   });
   await project.populate('ownerId', 'fullName');
+  // A new tender has no natural notify() recipient (it's a public posting,
+  // not an event aimed at a specific person) — broadcast it the same way
+  // presence:online/offline already is, so an open jobs/browse list can
+  // pick it up live instead of waiting for a remount.
+  if (project.projectType === 'tender') {
+    req.app.get('io')?.emit('project:created', { id: project._id, projectType: project.projectType });
+  }
   return created(res, project);
 });
 

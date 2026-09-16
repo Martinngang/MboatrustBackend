@@ -222,6 +222,7 @@ const refreshStatus = catchAsync(async (req, res) => {
       if (project && project.status === 'open') {
         project.status = 'funded';
         await project.save();
+        await notificationService.notify(project.ownerId, 'project_funded', { projectId: project._id, amount: escrow.netAmount });
       }
     }
   }

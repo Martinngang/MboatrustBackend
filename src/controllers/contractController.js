@@ -135,8 +135,8 @@ const terminate = catchAsync(async (req, res) => {
     Project.findById(contract.projectId).select('ownerId title').lean(),
     Bid.findById(contract.bidId).select('contractorId').lean(),
   ]);
-  if (project) await notificationService.notify(project.ownerId, 'contract_terminated', { projectTitle: project.title }, meta);
-  if (bid) await notificationService.notify(bid.contractorId, 'contract_terminated', { projectTitle: project?.title }, meta);
+  if (project) await notificationService.notify(project.ownerId, 'contract_terminated', { projectId: contract.projectId, projectTitle: project.title }, meta);
+  if (bid) await notificationService.notify(bid.contractorId, 'contract_terminated', { projectId: contract.projectId, projectTitle: project?.title }, meta);
 
   return ok(res, contract);
 });
@@ -168,8 +168,8 @@ async function notifyContractParties(contract, type, adminId, relatedAction) {
     Bid.findById(contract.bidId).select('contractorId').lean(),
   ]);
   const meta = { adminId, relatedAction, relatedType: 'Contract', relatedId: contract._id };
-  if (project) await notificationService.notify(project.ownerId, type, {}, meta);
-  if (bid) await notificationService.notify(bid.contractorId, type, {}, meta);
+  if (project) await notificationService.notify(project.ownerId, type, { projectId: contract.projectId }, meta);
+  if (bid) await notificationService.notify(bid.contractorId, type, { projectId: contract.projectId }, meta);
 }
 
 const adminUpdate = catchAsync(async (req, res) => {

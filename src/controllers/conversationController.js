@@ -3,6 +3,7 @@ const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const { buildDirectKey, assertLegitimateContext } = require('../utils/conversationContext');
+const notificationService = require('../services/notificationService');
 
 const getMine = catchAsync(async (req, res) => {
   const { page = 1, limit = 50 } = req.query;
@@ -89,6 +90,12 @@ const create = catchAsync(async (req, res) => {
       role: 'admin'
     });
     await conversation.populate('participantIds', 'fullName avatarUrl');
+    // Previously nobody but the creator ever learned this group existed —
+    // no push, no email, no in-app notification of any kind.
+    const otherParticipantIds = participantIds.filter((id) => id !== String(req.user._id));
+    if (otherParticipantIds.length > 0) {
+      await notificationService.notifyMany(otherParticipantIds, 'conversation_created', { conversationId: conversation._id });
+    }
     return created(res, conversation);
   }
 

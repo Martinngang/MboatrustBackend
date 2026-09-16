@@ -252,6 +252,7 @@ const updateStatus = catchAsync(async (req, res) => {
 
   await notificationService.notify(bid.contractorId, 'bid_status_changed', {
     bidId: bid._id,
+    projectId: bid.projectId,
     status,
   });
 
