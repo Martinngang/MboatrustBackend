@@ -9,6 +9,7 @@ const router = Router();
 
 router.get('/', authenticate, conversationController.getMine);
 router.get('/direct/:userId', authenticate, conversationController.getWithUser);
+router.post('/advisor', authenticate, conversationController.getOrCreateAdvisor);
 router.get('/:id', authenticate, conversationController.getOne);
 router.post('/', authenticate, conversationController.create); // Simplified validation
 router.post('/:id/read', authenticate, conversationController.markRead);

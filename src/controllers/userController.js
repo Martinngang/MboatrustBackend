@@ -370,6 +370,7 @@ const search = catchAsync(async (req, res) => {
     _id: { $ne: req.user._id },
     isActive: true,
     'roles.roleType': { $ne: 'admin' },
+    isSystemAccount: { $ne: true }, // The AI Advisor has its own dedicated entry point, not this generic picker
     fullName: pattern, // Name search only, as requested
   })
     .select('_id fullName avatarUrl') // Minimal fields

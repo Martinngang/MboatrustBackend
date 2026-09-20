@@ -49,7 +49,16 @@ function isRetryable(error) {
 // text is produced (confirmed live: a trivial one-line JSON reply consumed
 // ~160 thinking tokens on top of the ~15 visible ones) — the default has to
 // budget for that or short, well-formed answers get silently truncated.
-async function analyzeWithGemini({ system, prompt, imageUrl, maxTokens = 2000 }) {
+// `history` is additive/optional — a real multi-turn conversation (see
+// advisorReplyService.js) passes prior turns as {role:'user'|'model', text},
+// rebuilt fresh from persisted Messages on every call since there's no
+// session/chat-state anywhere in this codebase. Every existing caller
+// (evidenceAnalysisService, landDuplicateService, matchingController) omits
+// it and gets the exact same single-turn request as before — passing a bare
+// `parts` array to generateContent() is equivalent to passing
+// `{contents:[{role:'user',parts}]}`, so this is a strict superset, not a
+// behavior change, for anyone who doesn't pass history.
+async function analyzeWithGemini({ system, prompt, imageUrl, maxTokens = 2000, history = [] }) {
   if (!isAiConfigured()) return { ok: false, error: 'AI not configured' };
 
   const attempt = async () => {
@@ -58,9 +67,13 @@ async function analyzeWithGemini({ system, prompt, imageUrl, maxTokens = 2000 })
       systemInstruction: system,
       generationConfig: { maxOutputTokens: maxTokens },
     });
-    const parts = [{ text: prompt }];
-    if (imageUrl) parts.push(await fetchImageAsInlineData(imageUrl));
-    const result = await withTimeout(model.generateContent(parts), CALL_TIMEOUT_MS);
+    const promptParts = [{ text: prompt }];
+    if (imageUrl) promptParts.push(await fetchImageAsInlineData(imageUrl));
+    const contents = [
+      ...history.map(({ role, text }) => ({ role, parts: [{ text }] })),
+      { role: 'user', parts: promptParts },
+    ];
+    const result = await withTimeout(model.generateContent({ contents }), CALL_TIMEOUT_MS);
     return result.response.text();
   };
 

@@ -7,6 +7,7 @@ const app = require('./app');
 const { resolveUser } = require('./middleware/auth');
 const { Conversation } = require('./models');
 const { bootstrapInitialAdmin } = require('./services/bootstrapAdminService');
+const { bootstrapAiAdvisor } = require('./services/bootstrapAdvisorService');
 const { setIO } = require('./services/socketRegistry');
 
 async function main() {
@@ -22,6 +23,7 @@ async function main() {
 
   await connectDB();
   await bootstrapInitialAdmin();
+  await bootstrapAiAdvisor();
 
   const server = http.createServer(app);
   const io = new Server(server, { cors: { origin: env.clientOrigins } });

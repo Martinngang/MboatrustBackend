@@ -10,6 +10,7 @@
     "seed:fees": "node src/scripts/seedFeeConfig.js",
     "seed:help-articles": "node src/scripts/seedHelpArticles.js",
     "verify:ai-features": "node src/scripts/verifyFraudAndMatching.js",
+    "verify:ai-advisor": "node src/scripts/verifyAiAdvisor.js",
     "verify:role-security": "node src/scripts/verifyRoleSecurity.js",
     "verify:team-templates": "node src/scripts/verifyTeamAndTemplates.js",
     "verify:team-delegation": "node src/scripts/verifyTeamDelegation.js",

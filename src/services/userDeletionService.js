@@ -4,7 +4,7 @@ const {
   LandListing, LandOffer, VisitRequest, NotificationPreference, Group, GroupMember,
   VerificationTask, VideoVerificationSession, Rating, RiskFlag, Conversation, Message,
   Notification, Referral, FeeConfig, Subscription, IdempotencyKey, TeamMember, ProjectTemplate,
-  VerifierProfile, SystemEvent, PooledContribution,
+  VerifierProfile, SystemEvent, PooledContribution, ConversationParticipant,
 } = require('../models');
 const { initFirebase } = require('../config/firebase');
 
@@ -68,6 +68,27 @@ async function hardDeleteUser(userId) {
   if (createdGroupIds.length > 0) {
     await GroupMember.deleteMany({ groupId: { $in: createdGroupIds } });
     await Group.deleteMany({ _id: { $in: createdGroupIds } });
+  }
+
+  // ── Their private thread with the AI Advisor ─────────────────────────
+  // Unlike a chat with another real person (which is only detached below, so
+  // the other party keeps their side), the Advisor is a system account: no
+  // human is left holding this conversation, and the Advisor's replies are
+  // just answers to this user's own questions. Erase it whole — messages of
+  // BOTH sides, the per-user pin/read rows, the conversation — instead of
+  // leaving an Advisor-only orphan behind.
+  const systemUserIds = (await User.find({ isSystemAccount: true }).select('_id').lean()).map((u) => u._id);
+  if (systemUserIds.length > 0) {
+    const advisorConversationIds = (
+      await Conversation.find({ contextType: 'direct', participantIds: { $all: [uid], $in: systemUserIds } }).select('_id').lean()
+    ).map((c) => c._id);
+    if (advisorConversationIds.length > 0) {
+      await Promise.all([
+        Message.deleteMany({ conversationId: { $in: advisorConversationIds } }),
+        ConversationParticipant.deleteMany({ conversationId: { $in: advisorConversationIds } }),
+        Conversation.deleteMany({ _id: { $in: advisorConversationIds } }),
+      ]);
+    }
   }
 
   // ── Everything else solely theirs ─────────────────────────────────────

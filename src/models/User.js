@@ -91,6 +91,12 @@ const UserSchema = new Schema(
     // requireAdminPermission. Keys mirror ADMIN_NAV's section keys on the
     // frontend (components/shell/adminNav.ts).
     adminPermissions: { type: [String], default: null },
+    // Marks the one, singleton "Mboa Trust Advisor" account (see
+    // services/bootstrapAdvisorService.js) — never a real signup. Lets the
+    // frontend render an "AI" badge for any conversation/message participant
+    // with this flag set, without hardcoding its user id anywhere, and lets
+    // userController.search exclude it from the "start a new chat" people-picker.
+    isSystemAccount: { type: Boolean, default: false },
   },
   { timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' } }
 );

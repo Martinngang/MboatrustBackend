@@ -117,5 +117,18 @@ module.exports = {
     model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
     fraudAnalysisEnabled: process.env.AI_FRAUD_ANALYSIS_ENABLED !== 'false',
     matchingRationaleEnabled: process.env.AI_MATCHING_RATIONALE_ENABLED !== 'false',
+    // The in-Messages AI Advisor chat (see services/advisorReplyService.js).
+    // Unlike the two flags above (gate a heuristic's *optional* AI opinion),
+    // this gates whether the Advisor's replies are AI-generated at all —
+    // when false (or geminiApiKey is blank), the Advisor still exists, is
+    // still a real pinned conversation, and still replies, just with a fixed
+    // "temporarily unavailable" message instead of calling Gemini.
+    advisorChatEnabled: process.env.AI_ADVISOR_CHAT_ENABLED !== 'false',
+    // Never a real signup — bootstrapAdvisorService upserts a User with this
+    // exact email on every boot, matching on it, so this must stay constant
+    // for a given deployment (changing it "orphans" the old account rather
+    // than renaming it, since email is how the upsert finds it again).
+    advisorEmail: (process.env.AI_ADVISOR_EMAIL || 'advisor@system.mboatrust.local').trim().toLowerCase(),
+    advisorName: process.env.AI_ADVISOR_NAME || 'Mboa Trust Advisor',
   },
 };

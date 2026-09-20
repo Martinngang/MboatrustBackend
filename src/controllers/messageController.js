@@ -32,7 +32,7 @@ async function deliverMessage(conversation, sender, { body, attachments, replyTo
     attachments: attachments || [],
     replyToId: replyToId || null,
   });
-  message = await message.populate('senderId', 'fullName avatarUrl');
+  message = await message.populate('senderId', 'fullName avatarUrl isSystemAccount');
 
   conversation.updatedAt = new Date();
   await conversation.save();
@@ -64,7 +64,7 @@ const getAll = catchAsync(async (req, res) => {
 
   const [items, total] = await Promise.all([
     Message.find({ conversationId })
-      .populate('senderId', 'fullName avatarUrl')
+      .populate('senderId', 'fullName avatarUrl isSystemAccount')
       .sort('sentAt')
       .skip((page - 1) * limit)
       .limit(Number(limit)),
@@ -79,6 +79,10 @@ const create = catchAsync(async (req, res) => {
 
   const io = req.app.get('io');
   const message = await deliverMessage(conversation, req.user, req.body, io);
+
+  require('../services/advisorReplyService')
+    .maybeReply(conversation, message.body, io)
+    .catch((err) => console.error('[messageController] advisor reply failed:', err));
 
   return created(res, message);
 });
@@ -133,7 +137,11 @@ const createDirect = catchAsync(async (req, res) => {
   const io = req.app.get('io');
   const message = await deliverMessage(conversation, req.user, { body: trimmedBody, attachments, replyToId }, io);
 
-  await conversation.populate('participantIds', 'fullName avatarUrl');
+  require('../services/advisorReplyService')
+    .maybeReply(conversation, trimmedBody, io)
+    .catch((err) => console.error('[messageController] advisor reply failed:', err));
+
+  await conversation.populate('participantIds', 'fullName avatarUrl isSystemAccount');
 
   return created(res, { conversation, message });
 });
@@ -223,4 +231,4 @@ const uploadAttachment = catchAsync(async (req, res) => {
   });
 });
 
-module.exports = { getAll, create, createDirect, edit, react, remove, uploadAttachment };
+module.exports = { getAll, create, createDirect, edit, react, remove, uploadAttachment, deliverMessage };
