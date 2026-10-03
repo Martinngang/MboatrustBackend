@@ -50,6 +50,9 @@ const CRITICAL_TYPES = new Set([
   'referral_removed',
   'rating_removed_by_admin',
   'admin_permissions_changed',
+  // A contractor working on an under-funded milestone at their own risk is
+  // something the funder must always hear about.
+  'milestone_proceed_at_risk',
 ]);
 
 /** A user with no NotificationPreference doc yet gets every category's

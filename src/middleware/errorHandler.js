@@ -14,6 +14,13 @@ function errorHandler(err, req, res, next) {
   } else if (err.name === 'CastError') {
     statusCode = 400;
     message = `Invalid ${err.path}: ${err.value}`;
+  } else if (err.name === 'BSONError') {
+    // Raised by `new mongoose.Types.ObjectId(badString)` — code that builds
+    // an ObjectId by hand (aggregation $match, stats services) bypasses
+    // Mongoose's own CastError, so a malformed id in the URL used to surface
+    // as a 500 with a stack trace instead of the 400 a bad id deserves.
+    statusCode = 400;
+    message = 'Invalid id';
   } else if (err.code === 11000) {
     statusCode = 409;
     message = `Duplicate value for: ${Object.keys(err.keyValue || {}).join(', ')}`;

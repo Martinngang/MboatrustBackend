@@ -13,7 +13,7 @@
 const axios = require('axios');
 const { connectDB } = require('../config/db');
 const mongoose = require('mongoose');
-const { User, Project, Bid, Dispute } = require('../models');
+const { User, Project, Bid, Dispute, Escrow: FundingEscrow } = require('../models');
 
 const TAG = 'verify-milestone-corrections-script';
 const BASE_URL = process.env.VERIFY_BASE_URL || 'http://localhost:5000/api/v1';
@@ -76,6 +76,8 @@ async function run() {
     // Award the contractor.
     const bid = await contractorClient.post('/bids', { projectId, price: 290000, timelineDays: 21, materialsPlan: 'x', notes: 'x' });
     await funderClient.patch(`/bids/${bid.data.data._id}/status`, { status: 'accepted' }, { headers: { 'Idempotency-Key': `${TAG}-award` } });
+    // Escrow must actually hold the money before a milestone can be worked on or released (staged funding) — seed a real completed fund row.
+    await FundingEscrow.create({ projectId, funderId: funder._id, type: 'fund', grossAmount: 290000, netAmount: 290000, currency: 'XAF', paymentProvider: 'mtn_momo', providerRole: 'collection', status: 'completed' });
 
     // Contractor submits evidence for week 1.
     await funderClient.post(`/projects/${projectId}/milestones/${milestoneId}/evidence`, { type: 'photo', fileUrl: 'https://example.com/fake.jpg' });

@@ -1,4 +1,5 @@
 const { ContractorProfile, Bid, User, Escrow, Contract } = require('../models');
+const mongoose = require('mongoose');
 const ApiError = require('../utils/ApiError');
 const { ok } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
@@ -7,6 +8,7 @@ const notificationService = require('../services/notificationService');
 const storageService = require('../services/storageService');
 const { getStats } = require('../services/contractorStatsService');
 const { getLeaderboard: computeLeaderboard } = require('../services/contractorLeaderboardService');
+const geocodingService = require('../services/geocodingService');
 
 const EMPTY_PROFILE = {
   categories: [],
@@ -101,6 +103,19 @@ const upsertMine = catchAsync(async (req, res) => {
       ...uploaded.map((u) => ({ url: u.secure_url, caption: '' })),
     ];
   }
+  // A manual pin always wins; geocode from the first coarse coverage
+  // region only when the contractor left `location` unset — this is for
+  // internal distance-based matching (see the model's own comment), not
+  // necessarily an exact address rendered on the public profile.
+  const hasLocation = update.location?.lat != null && update.location?.lng != null;
+  if (!hasLocation && update.regions?.length) {
+    const existing = await ContractorProfile.findOne({ userId: req.user._id }).select('location').lean();
+    const alreadyHasLocation = existing?.location?.lat != null && existing?.location?.lng != null;
+    if (!alreadyHasLocation) {
+      const resolved = await geocodingService.forwardGeocode([update.regions[0], 'Cameroon'].filter(Boolean).join(', '));
+      if (resolved) update.location = { lat: resolved.lat, lng: resolved.lng };
+    }
+  }
 
   const profile = await ContractorProfile.findOneAndUpdate(
     { userId: req.user._id },
@@ -173,6 +188,9 @@ const setAvailability = catchAsync(async (req, res) => {
 });
 
 const getPublic = catchAsync(async (req, res) => {
+  // getStats() builds an ObjectId by hand for its aggregations, so a malformed
+  // id used to 500 here instead of being rejected.
+  if (!mongoose.isValidObjectId(req.params.userId)) throw ApiError.badRequest('Invalid contractor id');
   const [user, profile, stats] = await Promise.all([
     User.findById(req.params.userId).select('fullName avatarUrl kycStatus').lean(),
     ContractorProfile.findOne({ userId: req.params.userId }).lean(),

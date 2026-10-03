@@ -1,4 +1,5 @@
 const { Schema, model } = require('mongoose');
+const { LocationDetailsSchema } = require('./Project');
 
 /** Mirrors ContractorProfile's shape (specialties/regions/location/bio/
  * isAvailable) plus an application review state machine ContractorProfile
@@ -14,6 +15,7 @@ const VerifierProfileSchema = new Schema(
       lat: { type: Number, default: null },
       lng: { type: Number, default: null },
     },
+    locationDetails: { type: LocationDetailsSchema, default: () => ({}) },
     bio: { type: String, default: '' },
     idDocumentUrl: { type: String, default: '' },
     applicationStatus: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },

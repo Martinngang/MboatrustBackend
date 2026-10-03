@@ -31,13 +31,17 @@ function asUser(userId) {
 }
 
 async function makeFundingProject(ownerId, milestoneAmounts) {
-  return Project.create({
+  const project = await Project.create({
     projectType: 'funding',
     ownerId,
     title: `${TAG} project`,
     totalAmount: milestoneAmounts.reduce((a, b) => a + b, 0),
     milestones: milestoneAmounts.map((amount, i) => ({ name: `Milestone ${i}`, amount, orderIndex: i, status: 'under_review' })),
   });
+  // Escrow must actually hold the money before a milestone can be worked on or released (staged funding) — seed a real completed fund row.
+  const total = milestoneAmounts.reduce((a, b) => a + b, 0);
+  await Escrow.create({ projectId: project._id, funderId: ownerId, type: 'fund', grossAmount: total, netAmount: total, currency: 'XAF', paymentProvider: 'mtn_momo', providerRole: 'collection', status: 'completed' });
+  return project;
 }
 
 async function approve(client, projectId, milestoneId) {

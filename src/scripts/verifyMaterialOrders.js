@@ -124,6 +124,8 @@ async function run() {
     });
     const bidId = bid.data.data._id;
     const award = await funderClient.patch(`/bids/${bidId}/status`, { status: 'accepted' }, { headers: { 'Idempotency-Key': `${TAG}-award` } });
+    // Escrow must actually hold the money before a milestone can be worked on or released (staged funding) — seed a real completed fund row.
+    await Escrow.create({ projectId: projectId, funderId: funder._id, type: 'fund', grossAmount: 250000, netAmount: 250000, currency: 'XAF', paymentProvider: 'mtn_momo', providerRole: 'collection', status: 'completed' });
     record('Contractor bid awarded', award.status === 200, `status=${award.status}`);
 
     // ── Create-order authority ────────────────────────────────────────────

@@ -36,8 +36,24 @@ const reverseGeocode = catchAsync(async (req, res) => {
   const lng = Number(req.query.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw ApiError.badRequest('lat and lng are required numbers');
 
-  const placeName = await geocodingService.reverseGeocode(lat, lng);
-  return ok(res, { placeName });
+  const resolved = await geocodingService.reverseGeocode(lat, lng);
+  return ok(res, { placeName: resolved?.placeName || null, formattedAddress: resolved?.formattedAddress || null });
 });
 
-module.exports = { convert, reverseGeocode };
+/** Forward geocode — resolves a typed address/place name to coordinates.
+ * Used by the "search an address" affordance in every manual-pin-correction
+ * UI, and by location-entry forms (posting a tender, listing land) that
+ * don't already have a live-GPS or dropdown-centroid source. No auth, same
+ * framing as reverseGeocode/convert above — a stateless lookup. Returns
+ * `{ result: null }` (not a 404) when nothing resolves — this is a normal,
+ * expected outcome (the caller falls back to letting the user pin it
+ * manually), not an error. */
+const geocode = catchAsync(async (req, res) => {
+  const query = typeof req.query.query === 'string' ? req.query.query.trim() : '';
+  if (!query) throw ApiError.badRequest('query is required');
+
+  const result = await geocodingService.forwardGeocode(query);
+  return ok(res, { result });
+});
+
+module.exports = { convert, reverseGeocode, geocode };

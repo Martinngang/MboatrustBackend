@@ -16,6 +16,8 @@ const NegotiationRoundSchema = new Schema(
     timelineDays: { type: Number, required: true, min: 1 },
     milestones: { type: [MilestoneProposalSchema], default: [] },
     message: { type: String, default: '' },
+    // How escrow is to be funded under these terms — see Project.fundingMode.
+    fundingMode: { type: String, enum: ['staged', 'full_upfront'], default: 'staged' },
     createdAt: { type: Date, default: Date.now },
   },
   { _id: false }
@@ -34,6 +36,8 @@ const BidSchema = new Schema(
     // Optional per-milestone breakdown of `price` — empty means a lump-sum
     // quote with no schedule proposed yet.
     milestones: { type: [MilestoneProposalSchema], default: [] },
+    // Mirrors the latest round, like price/timelineDays/milestones above.
+    fundingMode: { type: String, enum: ['staged', 'full_upfront'], default: 'staged' },
     materialsPlan: { type: String, default: '' },
     notes: { type: String, default: '' },
     status: { type: String, enum: ['submitted', 'accepted', 'rejected', 'withdrawn'], default: 'submitted' },

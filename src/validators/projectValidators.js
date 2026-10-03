@@ -1,5 +1,5 @@
 const { z } = require('zod');
-const { geoPoint } = require('./common');
+const { geoPoint, requiredGeoPoint, locationDetailsExtras } = require('./common');
 
 const milestoneInput = z.object({
   name: z.string().min(1),
@@ -9,6 +9,9 @@ const milestoneInput = z.object({
   requiresVideo: z.boolean().optional().default(false),
   requiresVerifier: z.boolean().optional().default(false),
   requiresCosigner: z.boolean().optional().default(false),
+  // Optional — where THIS milestone happens, distinct from the project's
+  // own `location`. See Project.js's MilestoneSchema comment.
+  location: geoPoint.optional(),
 });
 
 const createProject = z.object({
@@ -18,6 +21,7 @@ const createProject = z.object({
   category: z.string().optional().default(''),
   locationName: z.string().optional().default(''),
   location: geoPoint.optional(),
+  ...locationDetailsExtras,
   // Not `.url()` — combined with `.default('')` that fails Zod's own
   // default value (the empty string isn't a valid URL either), rejecting
   // every request that omits imageUrl entirely.
@@ -27,6 +31,10 @@ const createProject = z.object({
   currency: z.enum(['USD', 'EUR', 'GBP', 'XAF']).optional().default('XAF'),
   requiresMultiSig: z.boolean().optional().default(false),
   milestones: z.array(milestoneInput).optional().default([]),
+  // The funder's yes/no answer to "do you already have a project plan?" —
+  // the file itself (if yes) is a follow-up multipart call to
+  // POST /projects/:id/plan-document, since this endpoint is plain JSON.
+  hasExistingPlan: z.boolean().optional().default(false),
   // Materials-managed-by is deliberately NOT set here — a project always
   // starts 'contractor'-managed (the Project schema default) and only ever
   // becomes supplier-managed via POST /projects/:id/assign-supplier, once
@@ -42,6 +50,7 @@ const updateProject = z.object({
   category: z.string().optional(),
   locationName: z.string().optional(),
   location: geoPoint.optional(),
+  ...locationDetailsExtras,
   imageUrl: z.string().optional(),
   deadline: z.coerce.date().optional(),
   totalAmount: z.number().min(0).optional(),
@@ -82,7 +91,12 @@ const submitEvidence = z.object({
   // controller ever saw it, so every submission fell through to the
   // server-side re-geocode fallback regardless of what the client sent.
   placeName: z.string().max(500).optional(),
+  formattedAddress: z.string().max(1000).optional(),
   fileHash: z.string().optional(),
+  // How the file was obtained — 'ar_camera' for a live in-app HUD-camera
+  // capture, 'gallery_upload' (default) for anything picked from an
+  // existing file/gallery. See Project.js's EvidenceSchema.captureSource.
+  captureSource: z.enum(['ar_camera', 'gallery_upload']).optional().default('gallery_upload'),
 });
 
 const decideApproval = z.object({
@@ -93,4 +107,26 @@ const requestChanges = z.object({
   reason: z.string().min(1),
 });
 
-module.exports = { createProject, updateProject, assignSupplier, fundProject, submitEvidence, decideApproval, requestChanges };
+// Dedicated endpoint, same reasoning as assignSupplier above — a pin
+// correction is metadata, never money, so it must stay legal at any project
+// status, not just while still 'draft'/'open' like the generic update.
+const updateLocation = z.object({
+  location: requiredGeoPoint,
+  ...locationDetailsExtras,
+});
+
+const requestLocationVerification = z.object({
+  verifierId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid id'),
+});
+
+module.exports = {
+  createProject,
+  updateProject,
+  assignSupplier,
+  fundProject,
+  submitEvidence,
+  decideApproval,
+  requestChanges,
+  updateLocation,
+  requestLocationVerification,
+};

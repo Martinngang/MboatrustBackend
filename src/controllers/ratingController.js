@@ -44,6 +44,8 @@ const remove = catchAsync(async (req, res) => {
 });
 
 const getSummary = catchAsync(async (req, res) => {
+  // Hand-built ObjectId in the $match — validate first, or a malformed id 500s.
+  if (!mongoose.isValidObjectId(req.params.userId)) throw ApiError.badRequest('Invalid user id');
   const stats = await Rating.aggregate([
     { $match: { toUserId: new mongoose.Types.ObjectId(req.params.userId) } },
     { $group: { _id: null, average: { $avg: '$score' }, count: { $sum: 1 } } },

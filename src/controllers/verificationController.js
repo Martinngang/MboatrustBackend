@@ -4,6 +4,7 @@ const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const notificationService = require('../services/notificationService');
 const { getRecommendedVerifiers } = require('../services/verifierMatchingService');
+const { resolveLocationDetails } = require('../services/locationDetailsService');
 
 /**
  * `targetId` is a polymorphic reference (a milestone subdocument _id within
@@ -16,6 +17,21 @@ async function resolveTarget(task) {
   if (task.targetType === 'land_listing') {
     const listing = await LandListing.findById(task.targetId).select('title city region').lean();
     return listing ? { title: listing.title || 'Land listing', location: `${listing.city}, ${listing.region}` } : null;
+  }
+  if (task.targetType === 'project_location') {
+    const project = await Project.findById(task.targetId).select('title locationName location locationDetails').lean();
+    return project
+      ? {
+          title: project.title,
+          location: project.locationName,
+          projectId: project._id,
+          // So a verifier screen can show what they're being asked to
+          // confirm/correct — a resolved place name, not just raw
+          // coordinates or the free-text locationName.
+          coordinates: project.location?.lat != null && project.location?.lng != null ? project.location : null,
+          locationDetails: project.locationDetails || null,
+        }
+      : null;
   }
   const project = await Project.findOne({ 'milestones._id': task.targetId }).select('title locationName milestones').lean();
   if (!project) return null;
@@ -31,6 +47,11 @@ async function isTargetOwner(userId, targetType, targetId) {
   if (targetType === 'land_listing') {
     const listing = await LandListing.findById(targetId).select('sellerId').lean();
     return Boolean(listing && String(listing.sellerId) === String(userId));
+  }
+  if (targetType === 'project_location') {
+    const project = await Project.findById(targetId).select('ownerId coSignerId').lean();
+    if (!project) return false;
+    return String(project.ownerId) === String(userId) || String(project.coSignerId) === String(userId);
   }
   const project = await Project.findOne({ 'milestones._id': targetId }).select('ownerId coSignerId').lean();
   if (!project) return false;
@@ -122,8 +143,48 @@ const submitReport = catchAsync(async (req, res) => {
   task.reportText = req.body.reportText;
   task.reportPhotos = req.body.reportPhotos;
   task.confirmedMatch = req.body.confirmedMatch;
+  if (req.body.confirmedLocation) task.confirmedLocation = req.body.confirmedLocation;
+
+  // Closes the loop for a funder's "I don't know the exact location, send a
+  // Verifier" request — the confirmed coordinates land directly on the
+  // project, and notify() gives the funder's already-open project screen a
+  // live update for free (see notificationService.js's socket push).
+  if (task.targetType === 'project_location' && req.body.confirmedLocation) {
+    const project = await Project.findById(task.targetId).select(
+      'ownerId location locationDetails locationBeforeVerification locationBeforeVerificationDetails'
+    );
+    if (project) {
+      // One-time snapshot of whatever was there right before this
+      // confirmation overwrites it — never re-taken on a later
+      // re-verification, so it always reflects the ORIGINAL pre-verification
+      // value, not whatever the last verifier before this one confirmed.
+      if (!project.locationBeforeVerification) {
+        project.locationBeforeVerification = project.location;
+        project.locationBeforeVerificationDetails = project.locationDetails;
+      }
+      // Together with task.verifierId and task.updatedAt below, this IS the
+      // full audit record of who confirmed what location and when.
+      task.confirmedLocationDetails = await resolveLocationDetails({
+        lat: req.body.confirmedLocation.lat,
+        lng: req.body.confirmedLocation.lng,
+        placeName: req.body.placeName,
+        formattedAddress: req.body.formattedAddress,
+        source: 'verifier_confirmed',
+      });
+      project.location = req.body.confirmedLocation;
+      project.locationDetails = task.confirmedLocationDetails;
+      project.locationVerificationStatus = 'confirmed';
+      await project.save();
+      await notificationService.notify(project.ownerId, 'location_verified', {
+        projectId: project._id,
+        taskId: task._id,
+      });
+    }
+  }
+
   task.status = 'submitted';
   await task.save();
+
   return ok(res, task);
 });
 

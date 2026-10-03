@@ -5,6 +5,7 @@ const catchAsync = require('../utils/catchAsync');
 const storageService = require('../services/storageService');
 const { logAdminAction } = require('../services/adminActionLogService');
 const notificationService = require('../services/notificationService');
+const { resolveLocationDetails } = require('../services/locationDetailsService');
 
 const getMine = catchAsync(async (req, res) => {
   const profile = await VerifierProfile.findOne({ userId: req.user._id });
@@ -28,6 +29,18 @@ const upsertMine = catchAsync(async (req, res) => {
   const wasRejected = existing?.applicationStatus === 'rejected';
 
   const update = { ...req.body, idDocumentUrl };
+  // A verifier's own service-area pin — never store it without also
+  // attempting to resolve a place name/address, same rule as every other
+  // location-capture point.
+  if (req.body.location?.lat != null && req.body.location?.lng != null) {
+    update.locationDetails = await resolveLocationDetails({
+      lat: req.body.location.lat,
+      lng: req.body.location.lng,
+      placeName: req.body.placeName,
+      formattedAddress: req.body.formattedAddress,
+      source: req.body.locationSource || 'manual_pin',
+    });
+  }
   if (wasRejected) {
     update.applicationStatus = 'pending';
     update.reviewedBy = null;

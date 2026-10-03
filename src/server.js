@@ -43,6 +43,7 @@ async function main() {
     const user = await resolveUser({ authHeader: token ? `Bearer ${token}` : undefined, devUserId });
     if (!user || !user.isActive) return next(new Error('unauthorized'));
     socket.data.userId = String(user._id);
+    socket.data.isAdmin = Boolean(user.roles?.some((r) => r.roleType === 'admin'));
     next();
   });
 
@@ -55,6 +56,9 @@ async function main() {
     // (bids, milestones, notifications, new tender postings) targets this
     // room rather than needing its own conversation-style join dance.
     socket.join(`user:${userId}`);
+    // Platform-wide dashboard invalidations (see services/dashboardEvents.js)
+    // — content-free signals, so membership only decides who refetches.
+    if (socket.data.isAdmin) socket.join('role:admin');
     const currentCount = onlineUsers.get(userId) || 0;
     onlineUsers.set(userId, currentCount + 1);
     

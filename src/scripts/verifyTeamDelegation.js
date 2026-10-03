@@ -69,6 +69,8 @@ async function run() {
     const bidId = bid.data.data._id;
     const acceptBid = await funderClient.patch(`/bids/${bidId}/status`, { status: 'accepted' }, { headers: { 'Idempotency-Key': `${TAG}-award` } });
     record('Funder can accept the bid, creating a contract', acceptBid.status === 200 && acceptBid.data.data.contract != null);
+    // Escrow must actually hold the money before a milestone can be worked on or released (staged funding) — seed a real completed fund row.
+    await Escrow.create({ projectId: projectId, funderId: funder._id, type: 'fund', grossAmount: 100000, netAmount: 100000, currency: 'XAF', paymentProvider: 'mtn_momo', providerRole: 'collection', status: 'completed' });
 
     // Every real screen (MyBidsScreen/ContractDetailScreen, web and mobile)
     // queries `contractorId: <the logged-in user's own id>` — never the

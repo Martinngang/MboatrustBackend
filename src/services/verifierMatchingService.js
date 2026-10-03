@@ -18,6 +18,15 @@ async function resolveTargetForMatching(targetType, targetId) {
     if (!listing) return null;
     return { location: listing.location, category: null };
   }
+  if (targetType === 'project_location') {
+    // The whole point of this target type is a project whose location is
+    // usually still unset (that's why a verifier was requested) — scoreVerifier
+    // already degrades to the flat region-coverage credit when targetLoc is
+    // null, same as a land listing with no coordinates yet.
+    const project = await Project.findById(targetId).select('location category').lean();
+    if (!project) return null;
+    return { location: project.location, category: project.category || null };
+  }
   const project = await Project.findOne({ 'milestones._id': targetId }).select('location category').lean();
   if (!project) return null;
   return { location: project.location, category: project.category || null };

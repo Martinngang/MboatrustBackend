@@ -5,6 +5,7 @@ const catchAsync = require('../utils/catchAsync');
 const feeService = require('../services/feeService');
 const paymentService = require('../services/paymentService');
 const notificationService = require('../services/notificationService');
+const { getFundingState, handleFundCompleted, EPS } = require('../services/milestoneFundingService');
 
 /** Project owner invites someone else to pledge toward the project — a
  * pending PooledContribution the invited party must still actually pay
@@ -73,6 +74,14 @@ const contribute = catchAsync(async (req, res) => {
   }
 
   const fee = await feeService.calculateFee('project_funding', contribution.amount, contribution.currency);
+  // Same cap as a single-funder deposit: escrow never exceeds the contract value.
+  const fundingState = await getFundingState(project);
+  if (fee.netAmount > fundingState.unfundedAmount + EPS) {
+    throw ApiError.badRequest(
+      `This contribution would credit ${Math.round(fee.netAmount)} to escrow but only ${fundingState.unfundedAmount} of the contract value is still unfunded.`,
+      { code: 'EXCEEDS_REMAINING_TO_FUND', remainingToFund: fundingState.unfundedAmount }
+    );
+  }
   const paymentResult = await paymentService.collect(paymentProvider, {
     amount: contribution.amount,
     currency: contribution.currency,
@@ -100,14 +109,11 @@ const contribute = catchAsync(async (req, res) => {
     if (contribution.isRecurring) {
       contribution.nextChargeAt = new Date(Date.now() + contribution.recurrenceIntervalDays * 24 * 60 * 60 * 1000);
     }
-    if (project.status === 'open') {
-      project.status = 'funded';
-      await project.save();
-    }
   } else {
     contribution.status = 'failed';
   }
   await contribution.save();
+  if (paymentResult.status === 'completed') await handleFundCompleted(project, escrow);
 
   await notificationService.notify(project.ownerId, 'pooled_contribution_collected', {
     projectId: project._id,

@@ -1,4 +1,5 @@
 const { z } = require('zod');
+const { geoPoint } = require('./common');
 
 // See verifierProfileValidators.js's stringArray for why this accepts either
 // a real array or a JSON-encoded string — kept here too even though this
@@ -17,7 +18,9 @@ const stringArray = z.preprocess((val) => {
 
 const upsertMine = z.object({
   businessName: z.string().min(1),
-  location: z.object({ lat: z.number(), lng: z.number() }).optional(),
+  // Matches every other location field's shape (nullable, not required) now
+  // that the model default is null rather than {0,0} — see SupplierProfile.js.
+  location: geoPoint.optional(),
   address: z.string().optional(),
   region: z.string().min(1),
   registeredCategories: stringArray.optional(),

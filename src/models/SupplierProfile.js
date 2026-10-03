@@ -11,9 +11,14 @@ const SupplierProfileSchema = new Schema(
   {
     ownerId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
     businessName: { type: String, required: true },
+    // Previously defaulted to {0,0} — indistinguishable from a real
+    // coordinate off the coast of Ghana instead of "never set". Null (like
+    // every other location field in this codebase — Project, LandListing,
+    // ContractorProfile) so "unset" is actually detectable, including by the
+    // backfillCoordinates.js migration script.
     location: {
-      lat: { type: Number, default: 0 },
-      lng: { type: Number, default: 0 },
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
     },
     address: { type: String, default: '' },
     region: { type: String, required: true },

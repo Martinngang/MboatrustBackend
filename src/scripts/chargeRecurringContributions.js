@@ -11,6 +11,7 @@ const { PooledContribution, Project, Escrow } = require('../models');
 const feeService = require('../services/feeService');
 const paymentService = require('../services/paymentService');
 const notificationService = require('../services/notificationService');
+const { getFundingState, handleFundCompleted, EPS } = require('../services/milestoneFundingService');
 
 async function run() {
   await connectDB();
@@ -32,6 +33,12 @@ async function run() {
       }
 
       const fee = await feeService.calculateFee('project_funding', contribution.amount, contribution.currency);
+      // Never charge a co-funder past the agreed contract value.
+      const fundingState = await getFundingState(project);
+      if (fee.netAmount > fundingState.unfundedAmount + EPS) {
+        console.log(`[recurring] ${contribution._id}: project has only ${fundingState.unfundedAmount} left to fund, skipping charge`);
+        continue;
+      }
       if (!contribution.payerPhoneNumber) {
         console.log(`[recurring] ${contribution._id}: no stored payer phone number, skipping (was it ever successfully charged once?)`);
         continue;
@@ -61,6 +68,7 @@ async function run() {
         contribution.escrowId = escrow._id;
         contribution.nextChargeAt = new Date(Date.now() + contribution.recurrenceIntervalDays * 24 * 60 * 60 * 1000);
         await contribution.save();
+        await handleFundCompleted(project, escrow);
         await notificationService.notify(project.ownerId, 'pooled_contribution_collected', {
           projectId: project._id,
           contributionId: contribution._id,

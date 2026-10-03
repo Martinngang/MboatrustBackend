@@ -7,6 +7,7 @@ const paymentService = require('../services/paymentService');
 const escrowAnomalyService = require('../services/escrowAnomalyService');
 const { logAdminAction } = require('../services/adminActionLogService');
 const notificationService = require('../services/notificationService');
+const { handleFundCompleted } = require('../services/milestoneFundingService');
 
 // Transactions are their own collection (not embedded in Project) so admin
 // revenue reports and per-user transaction history can query independently.
@@ -41,18 +42,9 @@ async function assertCanAccessEscrow(escrow, user) {
  * Deliberately stricter than scopeToMyTransactions: that also matches a
  * funder's own tender project (so they can see the contractor's payout in
  * their transaction history), which must NOT count as money available for
- * the funder to withdraw. */
-async function withdrawableFilter(user) {
-  const myProjects = await Project.find({ ownerId: user._id }).select('_id').lean();
-  return {
-    type: 'release',
-    withdrawnAt: null,
-    $or: [
-      { payeeType: 'contractor', contractorId: user._id },
-      { payeeType: 'recipient', projectId: { $in: myProjects.map((p) => p._id) } },
-    ],
-  };
-}
+ * the funder to withdraw. Lives in services/withdrawableService.js so the
+ * dashboard's "Available payout" tile uses the exact same definition. */
+const { withdrawableFilter } = require('../services/withdrawableService');
 
 /** Sums the caller's unclaimed release escrows — the same figure the
  * Earnings screen's "Total Earned" derives from (release-type escrows),
@@ -219,9 +211,11 @@ const refreshStatus = catchAsync(async (req, res) => {
     await escrow.save();
     if (resolved === 'completed' && escrow.type === 'fund') {
       const project = await Project.findById(escrow.projectId);
-      if (project && project.status === 'open') {
-        project.status = 'funded';
-        await project.save();
+      if (project) {
+        // Every completed top-up (not just the first) settles milestone funding:
+        // flips open -> funded, tells the contractor what just became workable,
+        // and releases any milestone already approved while escrow was short.
+        await handleFundCompleted(project, escrow);
         await notificationService.notify(project.ownerId, 'project_funded', { projectId: project._id, amount: escrow.netAmount });
       }
     }

@@ -139,10 +139,10 @@ async function run() {
       projectId: project2Id, funderId: funder._id, type: 'fund', grossAmount: 200000, netAmount: 200000,
       currency: 'XAF', paymentProvider: 'mtn_momo', providerRole: 'collection', status: 'completed',
     });
-    const counterAfterFunding = await funderClient.post(`/bids/${bid2Id}/counter`, { price: 250000, timelineDays: 14, milestones: [] });
+    const counterAfterFunding = await funderClient.post(`/bids/${bid2Id}/counter`, { price: 150000, timelineDays: 14, milestones: [] });
     record('Funder can still counter after funding (counter alone doesn\'t move money)', counterAfterFunding.status === 200);
     const acceptAfterFunding = await funderClient.patch(`/bids/${bid2Id}/status`, { status: 'accepted' }, { headers: { 'Idempotency-Key': `${TAG}-accept-2` } });
-    record('Accepting DIFFERENT terms after real funding is blocked (409)', acceptAfterFunding.status === 409, `got ${acceptAfterFunding.status}`);
+    record('Accepting a price BELOW the already-funded 200000 is blocked (409); a price at/above it is allowed with staged funding (see verifyStagedFunding.js)', acceptAfterFunding.status === 409, `got ${acceptAfterFunding.status}`);
 
     // ── Regression: accepting a lump-sum (no-schedule) counter-offer must
     // rescale the project's EXISTING milestones to the new price, not leave

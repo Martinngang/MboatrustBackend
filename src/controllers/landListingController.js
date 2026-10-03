@@ -4,6 +4,8 @@ const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const storageService = require('../services/storageService');
 const landDuplicateService = require('../services/landDuplicateService');
+const geocodingService = require('../services/geocodingService');
+const { resolveLocationDetails } = require('../services/locationDetailsService');
 const notificationService = require('../services/notificationService');
 const { getRecommendedListings } = require('../services/landMatchingService');
 const { logAdminAction } = require('../services/adminActionLogService');
@@ -48,7 +50,25 @@ const getRecommended = catchAsync(async (req, res) => {
 });
 
 const create = catchAsync(async (req, res) => {
-  const listing = await LandListing.create({ ...req.body, sellerId: req.user._id });
+  // A manual pin always wins; geocode from city+region only when the client
+  // left location unset. Done BEFORE create (not after) so the duplicate/
+  // price-outlier proximity checks just below — which silently no-op when
+  // location is null — actually run for the common case where a seller
+  // never set coordinates themselves.
+  let location = req.body.location;
+  let locationDetails;
+  if (!location?.lat && !location?.lng && (req.body.city || req.body.region)) {
+    const resolved = await geocodingService.forwardGeocode([req.body.city, req.body.region, 'Cameroon'].filter(Boolean).join(', '));
+    if (resolved) {
+      location = { lat: resolved.lat, lng: resolved.lng };
+      locationDetails = { placeName: resolved.placeName, formattedAddress: resolved.formattedAddress, source: 'auto_detected', resolvedAt: new Date() };
+    }
+  } else if (location?.lat != null && location?.lng != null) {
+    // Client sent real coordinates (a manual pin) — never store them without
+    // attempting to resolve a place name/address for them too.
+    locationDetails = await resolveLocationDetails({ lat: location.lat, lng: location.lng, placeName: req.body.placeName, formattedAddress: req.body.formattedAddress, source: req.body.locationSource || 'manual_pin' });
+  }
+  const listing = await LandListing.create({ ...req.body, location, locationDetails, sellerId: req.user._id });
   const duplicateId = await landDuplicateService.findDuplicate(listing);
   const priceOutlier = await landDuplicateService.findPriceOutlier(listing);
 
@@ -95,6 +115,18 @@ const update = catchAsync(async (req, res) => {
   const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
   if (String(listing.sellerId) !== String(req.user._id) && !isAdmin) throw ApiError.forbidden();
   Object.assign(listing, req.body);
+  // A location edit (manual pin, GPS, or address search) never leaves a
+  // place name/address unresolved — same rule as project/milestone location
+  // updates below.
+  if (req.body.location?.lat != null && req.body.location?.lng != null) {
+    listing.locationDetails = await resolveLocationDetails({
+      lat: req.body.location.lat,
+      lng: req.body.location.lng,
+      placeName: req.body.placeName,
+      formattedAddress: req.body.formattedAddress,
+      source: req.body.locationSource || 'manual_pin',
+    });
+  }
   await listing.save();
   if (isAdmin && String(listing.sellerId) !== String(req.user._id)) {
     await logAdminAction({ adminId: req.user._id, action: 'land.update', targetType: 'LandListing', targetId: listing._id, detail: { fields: Object.keys(req.body) } });

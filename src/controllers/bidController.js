@@ -2,27 +2,20 @@
 // GET /projects/:projectId/bids-with-scores (matchingController.js, added
 // by the fraud/matching guide) — not duplicated here as a second
 // /bids/compare route, since that would just be the same feature twice.
-const { Bid, Project, Contract, User, Escrow, TeamMember } = require('../models');
+const { Bid, Project, Contract, User, TeamMember } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const notificationService = require('../services/notificationService');
 const contractDocumentService = require('../services/contractDocumentService');
+const { getFundingState, EPS } = require('../services/milestoneFundingService');
 
 function isAdmin(user) {
   return user.roles?.some((r) => r.roleType === 'admin');
 }
 
-/** Contractor ids of every contractor `req.user` is an active
- * 'submit_milestones' team delegate for (see TeamMember.js) — empty for
- * everyone who isn't delegated to submit milestones on someone else's
- * behalf. Shared by scopeToParty's security scope and getAll's own
- * contractorId query-param handling below, so both agree on who counts as
- * "acting as" a given contractor. */
-async function myDelegatedForIds(userId) {
-  const rows = await TeamMember.find({ userId, status: 'active', permissions: 'submit_milestones' }).select('ownerId').lean();
-  return rows.map((r) => r.ownerId);
-}
+// Shared with dashboardStatsService — see services/delegationService.js.
+const { delegatedForIds: myDelegatedForIds } = require('../services/delegationService');
 
 /** A bid is private between the contractor who placed it and the funder who
  * owns the tender it's on — the raw Bid collection has no ownership check
@@ -106,7 +99,7 @@ const create = catchAsync(async (req, res) => {
   const existingBid = await Bid.findOne({ projectId: project._id, contractorId: req.user._id }).select('_id').lean();
   if (existingBid) throw ApiError.conflict('You have already submitted a bid on this tender');
 
-  const { price, timelineDays, milestones = [], notes = '' } = req.body;
+  const { price, timelineDays, milestones = [], notes = '', fundingMode = 'staged' } = req.body;
   let bid;
   try {
     bid = await Bid.create({
@@ -115,7 +108,7 @@ const create = catchAsync(async (req, res) => {
       // The negotiation's opening round — every subsequent counter (either
       // side) appends here; the top-level price/timelineDays/milestones
       // fields above always mirror rounds[rounds.length - 1].
-      rounds: [{ proposedBy: 'contractor', price, timelineDays, milestones, message: notes, createdAt: new Date() }],
+      rounds: [{ proposedBy: 'contractor', price, timelineDays, milestones, fundingMode, message: notes, createdAt: new Date() }],
       lastProposedBy: 'contractor',
     });
   } catch (err) {
@@ -149,7 +142,9 @@ const counter = catchAsync(async (req, res) => {
 
   const proposedBy = isOwner ? 'funder' : 'contractor';
   const { price, timelineDays, milestones = [], message = '' } = req.body;
-  bid.rounds.push({ proposedBy, price, timelineDays, milestones, message, createdAt: new Date() });
+  const fundingMode = req.body.fundingMode || bid.fundingMode || 'staged';
+  bid.rounds.push({ proposedBy, price, timelineDays, milestones, fundingMode, message, createdAt: new Date() });
+  bid.fundingMode = fundingMode;
   bid.price = price;
   bid.timelineDays = timelineDays;
   bid.milestones = milestones;
@@ -180,15 +175,19 @@ const updateStatus = catchAsync(async (req, res) => {
 
   // The negotiation's final terms get locked onto the project the moment
   // it's accepted — this is the actual "mutually accepted agreement"
-  // moment the whole negotiation was building toward. Only blocked once
-  // real money has already moved against the *original* numbers: changing
-  // the total after funding would desync the escrow ledger, and fixing
-  // that for real needs a refund/top-up flow this doesn't have.
+  // moment the whole negotiation was building toward. With staged funding a
+  // funder may already have put some money in escrow before the award, so
+  // changed terms are allowed as long as they don't fall BELOW what is
+  // already funded (that would leave escrow holding more than the contract
+  // is worth, and fixing it needs a refund). Milestone coverage is derived
+  // from the ledger on demand, so re-scheduling milestones stays consistent.
   const changesTerms = status === 'accepted' && (bid.price !== project.totalAmount || bid.milestones.length > 0);
   if (changesTerms) {
-    const alreadyFunded = await Escrow.findOne({ projectId: project._id, type: 'fund', status: 'completed' }).select('_id').lean();
-    if (alreadyFunded) {
-      throw ApiError.conflict('This project has already received funding at its original terms — accepting different terms now would desync escrow. Reject or renegotiate before any funds are collected.');
+    const fundingNow = await getFundingState(project);
+    if (fundingNow.fundedAmount > bid.price + EPS) {
+      throw ApiError.conflict(
+        `This project already has ${fundingNow.fundedAmount} in escrow, which is more than the proposed price of ${bid.price}. Agree terms at or above the funded amount, or ask an admin to refund the difference first.`
+      );
     }
   }
 
@@ -197,6 +196,9 @@ const updateStatus = catchAsync(async (req, res) => {
 
   let contract = null;
   if (status === 'accepted') {
+    // How escrow gets funded is part of the agreed terms — take it from the
+    // accepted (latest) round.
+    project.fundingMode = bid.fundingMode || 'staged';
     if (changesTerms) {
       project.totalAmount = bid.price;
       if (bid.milestones.length > 0) {
@@ -241,6 +243,9 @@ const updateStatus = catchAsync(async (req, res) => {
       bidId: bid._id,
       generatedDocumentText,
       generatedDocumentUrl,
+      totalAmount: project.totalAmount,
+      fundingMode: project.fundingMode,
+      milestoneSchedule: project.milestones.map((m) => ({ name: m.name, amount: m.amount, orderIndex: m.orderIndex })),
     });
     project.status = 'in_progress';
     await project.save();

@@ -102,6 +102,8 @@ async function run() {
       milestones: [{ name: 'Only milestone', amount: 200000, orderIndex: 0 }],
     });
     createdProjectIds.push(multiSigProject._id);
+    // Escrow must actually hold the money before a milestone can be worked on or released (staged funding) — seed a real completed fund row.
+    await Escrow.create({ projectId: multiSigProject._id, funderId: funder._id, type: 'fund', grossAmount: 200000, netAmount: 200000, currency: 'XAF', paymentProvider: 'mtn_momo', providerRole: 'collection', status: 'completed' });
     multiSigProject.coSignerId = coSigner._id;
     await multiSigProject.save();
 

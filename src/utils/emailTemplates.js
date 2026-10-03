@@ -183,10 +183,45 @@ const CONTENT = {
     ctaLabel: 'Review evidence',
     ctaUrl: webUrl('/projects'),
   }),
+  milestone_funded: (p) => ({
+    subject: 'A milestone is funded — you can start',
+    heading: 'Milestone funded',
+    body: `"${p?.milestoneName || 'A milestone'}" (${money(p?.amount)}) is now fully held in escrow. You can start work on it.`,
+    ctaLabel: 'Open contract',
+    ctaUrl: webUrl('/contractor/contracts'),
+  }),
+  funding_needed: (p) => ({
+    subject: 'Fund the next milestone',
+    heading: 'Next milestone needs funding',
+    body: `"${p?.milestoneName || 'The next milestone'}" is not yet funded. Add ${money(p?.amount)} to escrow so the contractor can start it.`,
+    ctaLabel: 'Fund escrow',
+    ctaUrl: webUrl('/projects'),
+  }),
+  milestone_awaiting_funds: (p) => ({
+    subject: 'Milestone approved — waiting for escrow funding',
+    heading: 'Approved, awaiting funding',
+    body: `"${p?.milestoneName || 'A milestone'}" was approved but escrow is short by ${money(p?.shortfall)}. The payment is released automatically as soon as escrow is topped up.`,
+    ctaLabel: 'Fund escrow',
+    ctaUrl: webUrl('/projects'),
+  }),
+  milestone_proceed_at_risk: (p) => ({
+    subject: 'Contractor is proceeding without full escrow',
+    heading: 'Working without full escrow',
+    body: `The contractor chose to start "${p?.milestoneName || 'a milestone'}" without full escrow cover (funded ${money(p?.fundedAmount)} of ${money(p?.amount)}; ${money(p?.unfundedAmount)} is unsecured). This is not a funding or release, and payment is not guaranteed until you fund it.`,
+    ctaLabel: 'Fund escrow',
+    ctaUrl: webUrl('/projects'),
+  }),
   project_funded: () => ({
     subject: 'Your project received funding',
     heading: 'Project funded',
     body: 'Your project just received a new contribution toward its funding goal.',
+    ctaLabel: 'View project',
+    ctaUrl: webUrl('/projects'),
+  }),
+  verifier_invitation_accepted: (p) => ({
+    subject: 'Your invited verifier accepted',
+    heading: 'Verifier invitation accepted',
+    body: `${p?.verifierName || 'The person you invited'} accepted your invitation and is now assigned to confirm the location for "${p?.projectTitle || 'your project'}". They only have access to this one location-verification task — not to your account.`,
     ctaLabel: 'View project',
     ctaUrl: webUrl('/projects'),
   }),
@@ -419,4 +454,18 @@ function contentForNotification(type, payload, user) {
   };
 }
 
-module.exports = { renderEmailHtml, contentForNotification };
+/** Sent directly via mailerService.sendEmail, bypassing notify()/CONTENT
+ * above entirely — the recipient is an outside invitee who has no User
+ * document yet, so notificationService.notify(userId, ...) (which requires
+ * one) can't be used. See controllers/verifierInvitationController.js. */
+function verifierInvitationEmailContent({ projectTitle, funderName, ctaUrl }) {
+  return {
+    subject: `${funderName || 'A funder'} invited you to verify a project location on Mboa Trust`,
+    heading: "You've been invited as a verifier",
+    body: `${funderName || 'A funder'} invited you to confirm the site location for "${projectTitle || 'a project'}" on Mboa Trust. Accept the invitation to create or sign in to your own Verifier account and get started — this only gives you access to this one project's location-verification task, never to the funder's account or its data.`,
+    ctaLabel: 'Accept invitation',
+    ctaUrl,
+  };
+}
+
+module.exports = { renderEmailHtml, contentForNotification, webUrl, verifierInvitationEmailContent };

@@ -4,6 +4,7 @@ const { ok } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
 const { logAdminAction } = require('../services/adminActionLogService');
 const notificationService = require('../services/notificationService');
+const geocodingService = require('../services/geocodingService');
 
 const getMine = catchAsync(async (req, res) => {
   const profile = await SupplierProfile.findOne({ ownerId: req.user._id });
@@ -24,6 +25,15 @@ const upsertMine = catchAsync(async (req, res) => {
     update.applicationStatus = 'pending';
     update.reviewedBy = null;
     update.reviewedAt = null;
+  }
+  // A manual pin always wins; geocode from address+region only when the
+  // supplier left location unset (existing.location covers the "already
+  // set on a prior save, not touched this time" case).
+  const hasLocation = update.location?.lat != null && update.location?.lng != null;
+  const alreadyHasLocation = existing?.location?.lat != null && existing?.location?.lng != null;
+  if (!hasLocation && !alreadyHasLocation && (update.address || update.region)) {
+    const resolved = await geocodingService.forwardGeocode([update.address, update.region, 'Cameroon'].filter(Boolean).join(', '));
+    if (resolved) update.location = { lat: resolved.lat, lng: resolved.lng };
   }
 
   const profile = await SupplierProfile.findOneAndUpdate(

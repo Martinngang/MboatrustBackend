@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { Project, Escrow, Dispute, Bid, RiskFlag, User, SupplierProfile, MaterialOrder, TeamMember } = require('../models');
+const { Project, Escrow, Dispute, Bid, RiskFlag, User, SupplierProfile, MaterialOrder, TeamMember, VerifierProfile, VerificationTask, MilestoneRiskAcknowledgement } = require('../models');
 const ApiError = require('../utils/ApiError');
 const { ok, created } = require('../utils/apiResponse');
 const catchAsync = require('../utils/catchAsync');
@@ -10,10 +10,15 @@ const storageService = require('../services/storageService');
 const notificationService = require('../services/notificationService');
 const evidenceAnalysisService = require('../services/evidenceAnalysisService');
 const geocodingService = require('../services/geocodingService');
+const { resolveLocationDetails } = require('../services/locationDetailsService');
+const systemEventService = require('../services/systemEventService');
 const referralService = require('../services/referralService');
 const escrowAnomalyService = require('../services/escrowAnomalyService');
 const { logAdminAction } = require('../services/adminActionLogService');
 const { logTeamActivity } = require('../services/teamActivityLogService');
+const { getRecommendedVerifiers } = require('../services/verifierMatchingService');
+const { getFundingState, assertMilestoneWorkable, quoteFunding, handleFundCompleted, findAcceptedContractorId, EPS } = require('../services/milestoneFundingService');
+const { releaseIfFunded, finalizeReleases } = require('../services/milestoneReleaseService');
 
 const getAll = catchAsync(async (req, res) => {
   const { page = 1, limit = 20, projectType, status, ownerId, funderId, search } = req.query;
@@ -23,9 +28,11 @@ const getAll = catchAsync(async (req, res) => {
   if (ownerId) filter.ownerId = ownerId;
   // A funder never owns the project they fund — that's ownerId's role — so
   // "projects I've funded" can only be answered by looking at who actually
-  // paid into escrow, not at the Project document itself.
+  // paid into escrow, not at the Project document itself. Only a `completed`
+  // fund counts: a pending/failed payment never moved money, and a
+  // `reversed` one was refunded back to the funder.
   if (funderId) {
-    const fundedProjectIds = await Escrow.distinct('projectId', { funderId, type: 'fund' });
+    const fundedProjectIds = await Escrow.distinct('projectId', { funderId, type: 'fund', status: 'completed' });
     filter._id = { $in: fundedProjectIds };
   }
   // Free-text: title match, or owned by a user whose name matches — used by
@@ -88,8 +95,39 @@ function assertCanCreateProjectType(user, projectType) {
 const create = catchAsync(async (req, res) => {
   assertCanCreateProjectType(req.user, req.body.projectType);
   const milestones = (req.body.milestones || []).sort((a, b) => a.orderIndex - b.orderIndex);
+  // A manual pin (client sent `location`) always wins — only geocode when
+  // the client left it unset but gave us a human-readable place name to
+  // resolve. Never blocks/fails project creation on a geocoding miss: the
+  // project is just created with location still null, same as today,
+  // correctable later via PATCH /:id/location.
+  let location = req.body.location;
+  let locationDetails;
+  if (!location?.lat && !location?.lng && req.body.locationName) {
+    const resolved = await geocodingService.forwardGeocode(req.body.locationName);
+    if (resolved) {
+      location = { lat: resolved.lat, lng: resolved.lng };
+      locationDetails = {
+        placeName: resolved.placeName,
+        formattedAddress: resolved.formattedAddress,
+        source: 'geocoded_search',
+        resolvedAt: new Date(),
+      };
+    }
+  } else if (location?.lat != null && location?.lng != null) {
+    // A manual pin (or GPS fix) sent straight from the client — never store
+    // it without also attempting to resolve a place name/address.
+    locationDetails = await resolveLocationDetails({
+      lat: location.lat,
+      lng: location.lng,
+      placeName: req.body.placeName,
+      formattedAddress: req.body.formattedAddress,
+      source: req.body.locationSource || 'manual_pin',
+    });
+  }
   const project = await Project.create({
     ...req.body,
+    location,
+    locationDetails,
     milestones,
     ownerId: req.user._id,
     status: 'open',
@@ -167,34 +205,28 @@ const remove = catchAsync(async (req, res) => {
   return res.status(204).send();
 });
 
-/** Sum of completed escrow activity for a project, net of fees, used to derive "amount raised". */
-/** Raw computation, factored out so groupController's dashboard can reuse it
- * without duplicating the aggregation — the route handler below is just a
- * thin wrapper. */
-async function getFundingSummaryData(projectId) {
-  const rows = await Escrow.aggregate([
-    {
-      $match: {
-        projectId: new mongoose.Types.ObjectId(projectId),
-        // A refunded fund transaction is flipped to 'reversed' (see
-        // escrowController.refund) purely to block a second refund of the
-        // same transaction — it still represents money that was actually
-        // collected, so it must stay in the 'fund' sum or its paired
-        // 'refund' entry double-subtracts and pushes "raised" negative.
-        $or: [{ status: 'completed' }, { type: 'fund', status: 'reversed' }],
-      },
-    },
-    { $group: { _id: '$type', total: { $sum: '$netAmount' } } },
-  ]);
-  const byType = Object.fromEntries(rows.map((r) => [r._id, r.total]));
-  const raised = (byType.fund || 0) - (byType.refund || 0);
-  const released = byType.release || 0;
-  return { raised, released, escrowBalance: raised - released };
-}
+// Lives in services/fundingSummaryService.js (so services can reuse it
+// without importing a controller); still re-exported below for
+// groupController's dashboard.
+const { getFundingSummaryData } = require('../services/fundingSummaryService');
 
 const getFundingSummary = catchAsync(async (req, res) => {
+  // getFundingSummaryData builds the ObjectId by hand for its $match, which
+  // bypasses Mongoose's CastError — a malformed id used to 500 here.
+  if (!mongoose.isValidObjectId(req.params.id)) throw ApiError.badRequest('Invalid project id');
   const summary = await getFundingSummaryData(req.params.id);
   return ok(res, summary);
+});
+
+/** "Fee on top" quote: what the funder must pay for `netAmount` to be
+ * credited to escrow. Single source of fee maths for web and mobile. */
+const getFundingQuote = catchAsync(async (req, res) => {
+  const netAmount = Number(req.query.netAmount);
+  const currency = req.query.currency || 'XAF';
+  if (!Number.isFinite(netAmount) || netAmount <= 0) throw ApiError.badRequest('netAmount must be a positive number');
+  const project = await Project.findById(req.params.id).select('_id');
+  if (!project) throw ApiError.notFound('Project not found');
+  return ok(res, await quoteFunding(netAmount, currency));
 });
 
 /**
@@ -225,6 +257,19 @@ const fundProject = catchAsync(async (req, res) => {
   }
 
   const fee = await feeService.calculateFee('project_funding', amount, currency);
+
+  // Never let escrow exceed the agreed contract value. Compared on what will
+  // actually be credited (net of the funding fee, XAF-converted) — the client
+  // asks /funding-quote for the gross to pay for a given credited amount.
+  const fundingState = await getFundingState(project);
+  const creditedCoverage = fee.netAmount * (conversion?.rate ?? 1);
+  if (creditedCoverage > fundingState.unfundedAmount + EPS) {
+    throw ApiError.badRequest(
+      `This payment would credit ${Math.round(creditedCoverage)} to escrow but only ${fundingState.unfundedAmount} of the ${fundingState.totalContractValue} contract value is still unfunded.`,
+      { code: 'EXCEEDS_REMAINING_TO_FUND', remainingToFund: fundingState.unfundedAmount }
+    );
+  }
+
   const paymentResult = await paymentService.collect(paymentProvider, {
     amount,
     currency,
@@ -253,9 +298,8 @@ const fundProject = catchAsync(async (req, res) => {
     statusHistory: [{ status: paymentResult.status, detail: 'escrow funded by user' }],
   });
 
-  if (paymentResult.status === 'completed' && project.status === 'open') {
-    project.status = 'funded';
-    await project.save();
+  if (paymentResult.status === 'completed') {
+    await handleFundCompleted(project, escrow);
   }
 
   await notificationService.notify(project.ownerId, 'project_funded', {
@@ -270,151 +314,6 @@ const fundProject = catchAsync(async (req, res) => {
   };
   return created(res, responseBody);
 });
-
-async function releaseMilestoneEscrow(project, milestone) {
-  // Closes (though the unique index below is the hard guarantee) the window
-  // where two genuinely concurrent decideApproval calls both pass the
-  // caller's status check and both reach here — without this, both would go
-  // on to make a REAL disbursement API call and create two release escrows
-  // for the same milestone, a real double-payout. Checked as early as
-  // possible, before any side-effecting work.
-  const existingRelease = await Escrow.findOne({ milestoneId: milestone._id, type: 'release' });
-  if (existingRelease) {
-    milestone.status = 'released';
-    return existingRelease;
-  }
-
-  const payoutCurrency = 'XAF';
-  let conversion = null;
-  let disbursementGross = milestone.amount;
-
-  // Tender projects have a real contractor party (whoever's Bid was
-  // accepted) — funding/land_purchase projects don't, so this stays null there.
-  let contractorId = null;
-  if (project.projectType === 'tender') {
-    const acceptedBid = await Bid.findOne({ projectId: project._id, status: 'accepted' })
-      .select('contractorId')
-      .lean();
-    contractorId = acceptedBid?.contractorId || null;
-  }
-
-  // Real payee routing for a materials-managed milestone: if a supplier has
-  // actually confirmed/dispatched/delivered an order against this exact
-  // milestone by the time it's approved, the release pays that store
-  // directly instead of the project's usual payee — mirroring what the
-  // frontend's resolveMilestonePayee has only ever been able to *display*.
-  // Every other milestone keeps today's existing behavior (payeePhoneNumber
-  // null, a known pre-existing gap in the contractor disbursement path —
-  // out of scope here, since fixing that needs a real payout-details
-  // capture step for that actor that doesn't exist yet). The 'recipient'
-  // fallback below is unreachable for any new project (funding-project
-  // creation is retired, see assertCanCreateProjectType) but is kept as-is
-  // so a still-open legacy funding project's milestone release keeps
-  // producing a valid, historically-consistent payeeType.
-  let payeeType = project.projectType === 'tender' ? 'contractor' : 'recipient';
-  let payeeSupplierId = null;
-  let payeeSupplierOwnerId = null;
-  let payoutProvider = 'mtn_momo';
-  let payeePhoneNumber = null;
-  let payoutMethodId = null;
-  const materialsOrder = await MaterialOrder.findOne({
-    milestoneId: milestone._id,
-    status: { $in: ['confirmed', 'out_for_delivery', 'delivered'] },
-  }).select('supplierId');
-  if (materialsOrder) {
-    const supplier = await SupplierProfile.findById(materialsOrder.supplierId).select('ownerId paymentProvider payoutPhoneNumber');
-    if (supplier) {
-      payeeType = 'supplier';
-      payeeSupplierId = supplier._id;
-      payeeSupplierOwnerId = supplier.ownerId;
-      payoutProvider = supplier.paymentProvider;
-      payeePhoneNumber = supplier.payoutPhoneNumber || null;
-    }
-  } else {
-    const targetUserId = payeeType === 'contractor' ? contractorId : project.ownerId;
-    if (targetUserId) {
-      const payeeUser = await User.findById(targetUserId).select('payoutMethods phoneNumber').lean();
-      if (payeeUser) {
-        const defaultMethod = payeeUser.payoutMethods?.find((m) => m.isDefault) || payeeUser.payoutMethods?.[0];
-        if (defaultMethod) {
-          payoutProvider = defaultMethod.provider;
-          payeePhoneNumber = defaultMethod.phoneNumber;
-          payoutMethodId = defaultMethod._id;
-        } else if (payeeUser.phoneNumber) {
-          payeePhoneNumber = payeeUser.phoneNumber;
-        }
-      }
-    }
-  }
-
-  if (project.currency !== payoutCurrency) {
-    conversion = await conversionService.convertAmount(milestone.amount, project.currency, payoutCurrency);
-    disbursementGross = conversion.settledAmount;
-  }
-
-  const fee = await feeService.calculateFee('milestone_release', disbursementGross, payoutCurrency);
-  const paymentResult = await paymentService.disburse(payoutProvider, {
-    amount: fee.netAmount,
-    currency: payoutCurrency,
-    payeePhoneNumber,
-    externalId: `release_${project._id}_${milestone._id}`,
-  });
-
-  let escrow;
-  try {
-    escrow = await Escrow.create({
-      projectId: project._id,
-      milestoneId: milestone._id,
-      contractorId,
-      payeeType,
-      payeeSupplierId,
-      payeePhoneNumber,
-      payoutMethodId,
-      type: 'release',
-      grossAmount: fee.grossAmount,
-      feeBreakdown: { feeType: fee.feeType, feeRate: fee.feeRate, feeAmount: fee.feeAmount },
-      netAmount: fee.netAmount,
-      currency: payoutCurrency,
-      paymentProvider: payoutProvider,
-      providerRole: 'disbursement',
-      providerReference: paymentResult.providerReference,
-      currencyConversion: conversion,
-      status: paymentResult.status,
-      statusHistory: [{ status: paymentResult.status, detail: 'milestone release disbursed' }],
-    });
-  } catch (err) {
-    // The early check above already handles the common case — this only
-    // fires in the rare true-simultaneous race that slips past it. The
-    // unique index (see Escrow.js) is what actually guarantees no duplicate
-    // ledger entry, not this catch; a real disbursement call may still have
-    // already fired for the losing request, which is a payment-provider-side
-    // limitation this codebase has no atomic primitive to prevent — but the
-    // ledger itself stays correct, which is what matters for what gets paid
-    // out from here on.
-    if (err.code !== 11000) throw err;
-    escrow = await Escrow.findOne({ milestoneId: milestone._id, type: 'release' });
-  }
-
-  milestone.status = 'released';
-
-  // Whoever actually received the disbursement — the funder only ever
-  // learns their own milestone *decision* went through (see the
-  // milestone_decision notify() in decideApproval below), never that money
-  // actually landed in the payee's hands, which is the more important half
-  // of this event for a contractor/supplier.
-  const payeeUserId = payeeType === 'supplier' ? payeeSupplierOwnerId : payeeType === 'contractor' ? contractorId : project.ownerId;
-  if (payeeUserId) {
-    await notificationService.notify(payeeUserId, 'milestone_payout_received', {
-      projectId: project._id,
-      milestoneId: milestone._id,
-      milestoneTitle: milestone.title,
-      amount: fee.netAmount,
-      currency: payoutCurrency,
-    });
-  }
-
-  return escrow;
-}
 
 /** Adds a photo/video evidence entry to a milestone and moves it into review. */
 const submitEvidence = catchAsync(async (req, res) => {
@@ -432,6 +331,9 @@ const submitEvidence = catchAsync(async (req, res) => {
   if (!['pending', 'submitted', 'under_review', 'disputed'].includes(milestone.status)) {
     throw ApiError.conflict(`Cannot submit evidence for a milestone in status "${milestone.status}"`);
   }
+  // Work only proceeds on a funded milestone — or one the contractor has
+  // explicitly chosen to work on at their own risk (proceedAtRisk).
+  assertMilestoneWorkable(await getFundingState(project), milestone._id);
 
   let fileUrl = req.body.fileUrl;
   const clientGeotag =
@@ -445,7 +347,12 @@ const submitEvidence = catchAsync(async (req, res) => {
       folder: `mboatrust/evidence/${project._id}`,
     });
     fileUrl = uploadResult.secure_url;
-    analysis = await evidenceAnalysisService.analyzeEvidence(req.file.buffer, project.location, clientGeotag);
+    // Prefer the milestone's own location when set (a multi-site project's
+    // milestone may be far from the project's overall pin) — falls back to
+    // the project's location, same as before this field existed.
+    const expectedLocation =
+      milestone.location?.lat != null && milestone.location?.lng != null ? milestone.location : project.location;
+    analysis = await evidenceAnalysisService.analyzeEvidence(req.file.buffer, expectedLocation, clientGeotag);
   }
   if (!fileUrl) throw ApiError.badRequest('Provide a file upload or fileUrl');
 
@@ -458,8 +365,15 @@ const submitEvidence = catchAsync(async (req, res) => {
   // still ends up with a place name even without one included on the
   // request the same as always.
   let placeName = req.body.placeName || null;
+  let formattedAddress = req.body.formattedAddress || null;
+  // clientGeotag came straight off the device's own GPS fix; when it's
+  // absent but the analysis still found coordinates, those were pulled from
+  // the file's EXIF data instead — 'auto_detected', not a live GPS read.
+  const geoSource = clientGeotag ? 'gps' : 'auto_detected';
   if (!placeName && analysis.geotag?.lat != null && analysis.geotag?.lng != null) {
-    placeName = await geocodingService.reverseGeocode(analysis.geotag.lat, analysis.geotag.lng);
+    const resolved = await geocodingService.reverseGeocode(analysis.geotag.lat, analysis.geotag.lng);
+    placeName = resolved?.placeName || null;
+    formattedAddress = resolved?.formattedAddress || null;
   }
 
   milestone.evidence.push({
@@ -468,6 +382,9 @@ const submitEvidence = catchAsync(async (req, res) => {
     notes: req.body.notes || '',
     geotag: analysis.geotag,
     placeName,
+    formattedAddress,
+    source: geoSource,
+    captureSource: req.body.captureSource,
     fileHash: analysis.fileHash,
     locationMatch: analysis.locationMatch,
     timestampRecent: analysis.timestampRecent,
@@ -479,6 +396,25 @@ const submitEvidence = catchAsync(async (req, res) => {
 
   if (project.status === 'funded') project.status = 'in_progress';
   await project.save();
+
+  // Non-blocking audit trail — every AR-camera capture (and, for completeness,
+  // every gallery upload) is recorded with the ids a later audit needs,
+  // regardless of whether anything else about the submission looked
+  // suspicious. Never awaited into the response path on failure — same
+  // "record it, never fail the request over it" contract every other
+  // logEvent call site in this codebase already follows.
+  systemEventService.logEvent({
+    type: 'milestone_evidence_captured',
+    severity: 'info',
+    source: 'projectController.submitEvidence',
+    userId: req.user._id,
+    detail: {
+      projectId: project._id,
+      milestoneId,
+      evidenceType: req.body.type,
+      captureSource: req.body.captureSource,
+    },
+  }).catch(() => {});
 
   // Broadened from duplicateFlag-only: a geotag that doesn't match the
   // project's site, or a stale timestamp, is just as real a signal as a
@@ -600,6 +536,163 @@ const assignSupplier = catchAsync(async (req, res) => {
   return ok(res, project);
 });
 
+/** Dedicated endpoint, same reasoning as assignSupplier above — a pin
+ * correction is metadata, never money, so it must stay legal at any project
+ * status, not just while still 'draft'/'open' like the generic update
+ * (which blocks all edits once funded, to protect the escrow ledger). */
+const updateLocation = catchAsync(async (req, res) => {
+  const project = await Project.findById(req.params.id);
+  if (!project) throw ApiError.notFound('Project not found');
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  if (String(project.ownerId) !== String(req.user._id) && !isAdmin) throw ApiError.forbidden();
+
+  project.location = req.body.location;
+  // A manual pin correction here is exactly the "manual map selection" case
+  // — never persist it without also attempting to resolve a place name.
+  if (req.body.location?.lat != null && req.body.location?.lng != null) {
+    project.locationDetails = await resolveLocationDetails({
+      lat: req.body.location.lat,
+      lng: req.body.location.lng,
+      placeName: req.body.placeName,
+      formattedAddress: req.body.formattedAddress,
+      source: req.body.locationSource || 'manual_pin',
+    });
+  } else {
+    project.locationDetails = undefined;
+  }
+  await project.save();
+  return ok(res, project);
+});
+
+/** Same as updateLocation above, scoped to one milestone's own location
+ * rather than the project's overall one — see MilestoneSchema.location in
+ * models/Project.js. */
+const updateMilestoneLocation = catchAsync(async (req, res) => {
+  const project = await Project.findById(req.params.id);
+  if (!project) throw ApiError.notFound('Project not found');
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  if (String(project.ownerId) !== String(req.user._id) && !isAdmin) throw ApiError.forbidden();
+
+  const milestone = project.milestones.id(req.params.milestoneId);
+  if (!milestone) throw ApiError.notFound('Milestone not found');
+
+  milestone.location = req.body.location;
+  if (req.body.location?.lat != null && req.body.location?.lng != null) {
+    milestone.locationDetails = await resolveLocationDetails({
+      lat: req.body.location.lat,
+      lng: req.body.location.lng,
+      placeName: req.body.placeName,
+      formattedAddress: req.body.formattedAddress,
+      source: req.body.locationSource || 'manual_pin',
+    });
+  } else {
+    milestone.locationDetails = undefined;
+  }
+  await project.save();
+  return ok(res, project);
+});
+
+/** Roles allowed to see the real plan-document URL — the owner, an admin,
+ * a co-signer, or anyone with the contractor/verifier role (browsing an
+ * open tender to decide whether to bid, or assigned to inspect the site —
+ * "during tender review" per the feature request). Deliberately NOT
+ * restricted to contractors who already bid: the plan is exactly what a
+ * contractor needs to decide whether to bid in the first place. */
+function canViewPlanDocument(user, project) {
+  if (String(project.ownerId) === String(user._id)) return true;
+  if (project.coSignerId && String(project.coSignerId) === String(user._id)) return true;
+  return Boolean(user.roles?.some((r) => ['admin', 'contractor', 'verifier'].includes(r.roleType)));
+}
+
+/** Uploads (or replaces) the project's plan document — mirrors
+ * landListingController.addDocument almost exactly. Owner/admin only.
+ * Deliberately a follow-up endpoint, not part of project creation itself:
+ * POST /projects is plain JSON (no multer), shared unchanged by both
+ * frontends' PostJobScreen. */
+const uploadPlanDocument = catchAsync(async (req, res) => {
+  const project = await Project.findById(req.params.id);
+  if (!project) throw ApiError.notFound('Project not found');
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  if (String(project.ownerId) !== String(req.user._id) && !isAdmin) throw ApiError.forbidden();
+  if (!req.file) throw ApiError.badRequest('No file uploaded');
+
+  const uploadResult = await storageService.uploadBuffer(req.file.buffer, {
+    folder: `mboatrust/project-plans/${project._id}`,
+    mimeType: req.file.mimetype,
+  });
+
+  project.planDocument = {
+    fileUrl: uploadResult.secure_url,
+    fileName: req.file.originalname || '',
+    mimeType: req.file.mimetype || '',
+    uploadedAt: new Date(),
+  };
+  project.hasPlanDocument = true;
+  project.hasExistingPlan = true;
+  await project.save();
+  return created(res, { hasPlanDocument: true });
+});
+
+/** The only code path that ever reads the select:false `planDocument`
+ * field — everything else (getOne/getAll/update/create) never sees it,
+ * automatically, per the schema. */
+const getPlanDocument = catchAsync(async (req, res) => {
+  const project = await Project.findById(req.params.id).select('+planDocument ownerId coSignerId');
+  if (!project) throw ApiError.notFound('Project not found');
+  if (!canViewPlanDocument(req.user, project)) throw ApiError.forbidden();
+  if (!project.planDocument) throw ApiError.notFound('No plan document uploaded for this project');
+  return ok(res, project.planDocument);
+});
+
+/** Funder-initiated — deliberately a NEW dedicated endpoint rather than
+ * loosening the existing admin-only POST /verification-tasks (see
+ * verificationController.create): a funder may only ever request
+ * verification of their OWN project's location, never assign an arbitrary
+ * verifier to an arbitrary target the way an admin can. */
+const requestLocationVerification = catchAsync(async (req, res) => {
+  const project = await Project.findById(req.params.id);
+  if (!project) throw ApiError.notFound('Project not found');
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  if (String(project.ownerId) !== String(req.user._id) && !isAdmin) throw ApiError.forbidden();
+
+  const verifierProfile = await VerifierProfile.findOne({ userId: req.body.verifierId }).select('applicationStatus');
+  if (!verifierProfile || verifierProfile.applicationStatus !== 'approved') {
+    throw ApiError.badRequest('This verifier is not approved yet');
+  }
+
+  const task = await VerificationTask.create({
+    targetType: 'project_location',
+    targetId: project._id,
+    verifierId: req.body.verifierId,
+  });
+  project.locationVerificationStatus = 'requested';
+  project.locationVerificationTaskId = task._id;
+  await project.save();
+
+  await notificationService.notify(req.body.verifierId, 'verification_assigned', {
+    taskId: task._id,
+    targetType: task.targetType,
+    targetId: task.targetId,
+  });
+
+  return created(res, { task, project });
+});
+
+/** Owner-only thin wrapper over the shared verifier-matching/scoring
+ * engine, scoped to this one project — same engine the admin-only
+ * getRecommendedVerifiersForTarget endpoint already uses for
+ * milestones/land listings, just reachable by the project's own owner
+ * instead of only an admin. */
+const getRecommendedVerifiersForProject = catchAsync(async (req, res) => {
+  const project = await Project.findById(req.params.id).select('ownerId');
+  if (!project) throw ApiError.notFound('Project not found');
+  const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
+  if (String(project.ownerId) !== String(req.user._id) && !isAdmin) throw ApiError.forbidden();
+
+  const recommendations = await getRecommendedVerifiers('project_location', project._id, { limit: Number(req.query.limit) || 10 });
+  return ok(res, recommendations);
+});
+
 /** Every userId that must have an 'approved' entry in milestone.approvers
  * before it can move to approved/released. Plain single-approver default
  * when neither flag is set — completely unchanged from before this prompt. */
@@ -657,6 +750,16 @@ async function applyApprovalDecision(req, project, milestone) {
   }
 
   let releasedEscrow = null;
+  let awaitingFunds = false;
+  let shortfall = 0;
+  // Approval is the funder's decision; the money can only move if escrow
+  // actually holds the milestone's amount. If it doesn't, the milestone stays
+  // `approved` (work accepted, payment owed) and is released automatically the
+  // moment the funder tops up — see settleApprovedMilestones.
+  const approveAndRelease = async () => {
+    milestone.status = 'approved';
+    ({ escrow: releasedEscrow, awaitingFunds, shortfall } = await releaseIfFunded(project, milestone));
+  };
   if (status === 'rejected') {
     milestone.status = 'disputed';
   } else if (required) {
@@ -665,25 +768,19 @@ async function applyApprovalDecision(req, project, milestone) {
     const allRequiredApproved = required.every((uid) =>
       milestone.approvers.some((a) => String(a.userId) === uid && a.status === 'approved')
     );
-    if (allRequiredApproved) {
-      milestone.status = 'approved';
-      releasedEscrow = await releaseMilestoneEscrow(project, milestone);
-    }
+    if (allRequiredApproved) await approveAndRelease();
   } else {
     // Original single-approver default, unchanged.
     const allApproved =
       milestone.approvers.length > 0 && milestone.approvers.every((a) => a.status === 'approved');
-    if (allApproved || milestone.approvers.length === 0) {
-      milestone.status = 'approved';
-      releasedEscrow = await releaseMilestoneEscrow(project, milestone);
-    }
+    if (allApproved || milestone.approvers.length === 0) await approveAndRelease();
   }
 
   const allReleased = project.milestones.every((m) => m.status === 'released');
   const justCompleted = allReleased && project.status !== 'completed';
   if (allReleased) project.status = 'completed';
 
-  return { releasedEscrow, justCompleted };
+  return { releasedEscrow, justCompleted, awaitingFunds, shortfall };
 }
 
 const decideApproval = catchAsync(async (req, res) => {
@@ -699,14 +796,14 @@ const decideApproval = catchAsync(async (req, res) => {
   // matters for multi-sig, where the loser's approval is real, distinct
   // information, not a duplicate of the winner's.
   const MAX_ATTEMPTS = 3;
-  let project, milestone, releasedEscrow, justCompleted;
+  let project, milestone, releasedEscrow, justCompleted, awaitingFunds, shortfall;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     project = await Project.findById(id);
     if (!project) throw ApiError.notFound('Project not found');
     milestone = project.milestones.id(milestoneId);
     if (!milestone) throw ApiError.notFound('Milestone not found');
 
-    ({ releasedEscrow, justCompleted } = await applyApprovalDecision(req, project, milestone));
+    ({ releasedEscrow, justCompleted, awaitingFunds, shortfall } = await applyApprovalDecision(req, project, milestone));
 
     try {
       await project.save();
@@ -722,33 +819,93 @@ const decideApproval = catchAsync(async (req, res) => {
     status: milestone.status,
   });
 
-  // Detection-only — runs after the release is already persisted, never
-  // able to delay or block the payout itself, and never touches the
-  // double-spend guard above. See escrowAnomalyService.
-  if (releasedEscrow) {
-    await escrowAnomalyService.checkAndFlag({
-      escrow: releasedEscrow,
-      beneficiaryId: releasedEscrow.contractorId || project.ownerId,
+  if (awaitingFunds) {
+    // The funder approved the work but escrow doesn't yet hold the milestone
+    // amount: nothing is released (and nothing is guaranteed) until they top
+    // up — at which point settleApprovedMilestones pays it automatically.
+    const contractorId = await findAcceptedContractorId(project);
+    const payload = { projectId: project._id, milestoneId, milestoneName: milestone.name, amount: milestone.amount, shortfall };
+    await notificationService.notify(project.ownerId, 'milestone_awaiting_funds', payload);
+    if (contractorId) await notificationService.notify(contractorId, 'milestone_awaiting_funds', payload);
+  }
+
+  // Anomaly checks, completion prompts and the "fund the next milestone"
+  // nudge — shared with the auto-release after a top-up.
+  await finalizeReleases(project, releasedEscrow ? [releasedEscrow] : [], { justCompleted });
+
+  return ok(res, { project, releasedEscrow, awaitingFunds: Boolean(awaitingFunds), shortfall: shortfall || 0 });
+});
+
+const PROCEED_AT_RISK_STATEMENT =
+  'I understand this milestone is not fully protected by escrow, that any unfunded amount is not currently secured, and that proceeding does not fund the milestone, release any money, or guarantee payment. I want to proceed at my own financial risk.';
+
+/**
+ * "Proceed Without Full Escrow" — the awarded contractor voluntarily opens an
+ * under-funded milestone at their own financial risk. This is ONLY an
+ * override of the funded-milestone gate: it creates no escrow rows, releases
+ * nothing, and guarantees nothing. What was on the table (amounts, who, when)
+ * is written to an immutable audit record and the funder is told.
+ */
+const proceedAtRisk = catchAsync(async (req, res) => {
+  const { id, milestoneId } = req.params;
+  if (req.body.acknowledged !== true) {
+    throw ApiError.badRequest('You must explicitly acknowledge the risk to proceed without full escrow');
+  }
+  const project = await Project.findById(id);
+  if (!project) throw ApiError.notFound('Project not found');
+  const party = await assertProjectParty(project, req.user._id);
+  if (party.via !== 'contractor') {
+    throw ApiError.forbidden('Only the awarded contractor can choose to proceed without full escrow');
+  }
+  const milestone = project.milestones.id(milestoneId);
+  if (!milestone) throw ApiError.notFound('Milestone not found');
+  if (['released', 'approved'].includes(milestone.status)) {
+    throw ApiError.conflict(`This milestone is already ${milestone.status}`);
+  }
+
+  const existing = await MilestoneRiskAcknowledgement.findOne({ milestoneId: milestone._id });
+  if (existing) {
+    return ok(res, { acknowledgement: existing, funding: await getFundingState(project) });
+  }
+
+  const state = await getFundingState(project);
+  const m = state.milestones.find((x) => x.id === String(milestone._id));
+  if (m.fundingStatus === 'funded') {
+    throw ApiError.conflict('This milestone is already fully funded — there is nothing to acknowledge');
+  }
+
+  let acknowledgement;
+  try {
+    acknowledgement = await MilestoneRiskAcknowledgement.create({
+      projectId: project._id,
+      milestoneId: milestone._id,
+      bidId: (await Bid.findOne({ projectId: project._id, status: 'accepted' }).select('_id').lean())?._id || null,
+      contractorId: req.user._id,
+      milestoneName: milestone.name,
+      milestoneAmount: milestone.amount,
+      fundedAmount: m.fundedAmount,
+      unfundedAmount: m.unfundedAmount,
+      currency: project.currency,
+      statement: PROCEED_AT_RISK_STATEMENT,
     });
+  } catch (err) {
+    if (err.code !== 11000) throw err;
+    acknowledgement = await MilestoneRiskAcknowledgement.findOne({ milestoneId: milestone._id });
   }
 
-  if (justCompleted) {
-    // A prompt, not an auto-generated rating — never fabricate one on
-    // someone's behalf. Reward the referrer of whichever party just
-    // finished their side of the work, if either was ever referred.
-    await notificationService.notify(project.ownerId, 'rating_prompt', { projectId: project._id });
-    await referralService.maybeRewardReferral(project.ownerId);
+  milestone.riskAcknowledgedAt = acknowledgement.acknowledgedAt;
+  await project.save();
 
-    if (project.projectType === 'tender') {
-      const acceptedBid = await Bid.findOne({ projectId: project._id, status: 'accepted' }).select('contractorId').lean();
-      if (acceptedBid) {
-        await notificationService.notify(acceptedBid.contractorId, 'rating_prompt', { projectId: project._id });
-        await referralService.maybeRewardReferral(acceptedBid.contractorId);
-      }
-    }
-  }
+  await notificationService.notify(project.ownerId, 'milestone_proceed_at_risk', {
+    projectId: project._id,
+    milestoneId: milestone._id,
+    milestoneName: milestone.name,
+    amount: milestone.amount,
+    fundedAmount: m.fundedAmount,
+    unfundedAmount: m.unfundedAmount,
+  });
 
-  return ok(res, { project, releasedEscrow });
+  return created(res, { acknowledgement, funding: await getFundingState(project) });
 });
 
 /** Is this user a real party to this project — the owner (funder on a
@@ -861,12 +1018,20 @@ module.exports = {
   cancel,
   remove,
   getFundingSummary,
+  getFundingQuote,
   fundProject,
   submitEvidence,
   decideApproval,
+  proceedAtRisk,
   disputeMilestone,
   requestMilestoneChanges,
   addCoSigner,
   assignSupplier,
+  updateLocation,
+  updateMilestoneLocation,
+  uploadPlanDocument,
+  getPlanDocument,
+  requestLocationVerification,
+  getRecommendedVerifiersForProject,
   getFundingSummaryData,
 };

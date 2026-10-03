@@ -5,6 +5,7 @@ const { Escrow, Project } = require('../models');
 const catchAsync = require('../utils/catchAsync');
 const { logEvent } = require('../services/systemEventService');
 const notificationService = require('../services/notificationService');
+const { handleFundCompleted } = require('../services/milestoneFundingService');
 const orangeMoneyProvider = require('../services/paymentProviders/orangeMoneyProvider');
 
 const stripe = env.stripe.secretKey ? new Stripe(env.stripe.secretKey) : null;
@@ -47,13 +48,11 @@ const notify = catchAsync(async (req, res) => {
 
     if (escrow.status === 'completed' && escrow.type === 'fund') {
       const project = await Project.findById(escrow.projectId);
-      if (project && project.status === 'open') {
-        project.status = 'funded';
-        await project.save();
-        // Async-provider funding (Orange Money) previously never told the
-        // owner their project was funded at all — only the synchronous/card
-        // path (projectController.js's fund handler) did. Same event, same
-        // shape as that path.
+      if (project) {
+        // Every completed top-up (not just the first) settles milestone funding:
+        // flips open -> funded, tells the contractor what just became workable,
+        // and releases any milestone already approved while escrow was short.
+        await handleFundCompleted(project, escrow);
         await notificationService.notify(project.ownerId, 'project_funded', { projectId: project._id, amount: escrow.netAmount });
       }
       logEvent({ type: 'payment_processed', severity: 'info', source: 'paymentWebhookController.notify', detail: { escrowId: escrow._id, projectId: escrow.projectId, amount: escrow.netAmount, currency: escrow.currency, verified: verified !== null } }).catch(() => {});
@@ -88,11 +87,13 @@ const stripeWebhook = catchAsync(async (req, res) => {
       await escrow.save();
       if (status === 'completed' && escrow.type === 'fund') {
         const project = await Project.findById(escrow.projectId);
-        if (project && project.status === 'open') {
-          project.status = 'funded';
-          await project.save();
-          await notificationService.notify(project.ownerId, 'project_funded', { projectId: project._id, amount: escrow.netAmount });
-        }
+        if (project) {
+        // Every completed top-up (not just the first) settles milestone funding:
+        // flips open -> funded, tells the contractor what just became workable,
+        // and releases any milestone already approved while escrow was short.
+        await handleFundCompleted(project, escrow);
+        await notificationService.notify(project.ownerId, 'project_funded', { projectId: project._id, amount: escrow.netAmount });
+      }
       }
       if (status === 'completed') {
         logEvent({ type: 'payment_processed', severity: 'info', source: 'paymentWebhookController.stripeWebhook', detail: { escrowId: escrow._id, projectId: escrow.projectId, amount: escrow.netAmount, currency: escrow.currency, eventType: event.type } }).catch(() => {});
@@ -159,9 +160,11 @@ const flutterwaveWebhook = catchAsync(async (req, res) => {
 
     if (escrow.status === 'completed' && escrow.type === 'fund') {
       const project = await Project.findById(escrow.projectId);
-      if (project && project.status === 'open') {
-        project.status = 'funded';
-        await project.save();
+      if (project) {
+        // Every completed top-up (not just the first) settles milestone funding:
+        // flips open -> funded, tells the contractor what just became workable,
+        // and releases any milestone already approved while escrow was short.
+        await handleFundCompleted(project, escrow);
         await notificationService.notify(project.ownerId, 'project_funded', { projectId: project._id, amount: escrow.netAmount });
       }
       logEvent({ type: 'payment_processed', severity: 'info', source: 'paymentWebhookController.flutterwaveWebhook', detail: { escrowId: escrow._id, projectId: escrow.projectId, amount: escrow.netAmount, currency: escrow.currency } }).catch(() => {});

@@ -1,4 +1,5 @@
 const { z } = require('zod');
+const { locationDetailsExtras } = require('./common');
 
 // multipart/form-data (when a file is attached, see routes.js's
 // upload.single('file')) can only carry string fields — multer never
@@ -21,6 +22,7 @@ const upsertMine = z.object({
   specialties: stringArray.optional(),
   regions: stringArray.optional(),
   location: z.object({ lat: z.number(), lng: z.number() }).optional(),
+  ...locationDetailsExtras,
   bio: z.string().optional(),
   isAvailable: z.coerce.boolean().optional(),
   // Accepted directly for the no-file/URL-only case — set server-side from

@@ -19,7 +19,12 @@ async function generateAndUploadContract({ project, bid, contractorName, ownerNa
     `Contractor: ${contractorName || bid.contractorId}\n` +
     `Total value: ${bid.price} ${project.currency}\n` +
     `Proposed timeline: ${bid.timelineDays} days\n\n` +
-    `Payment milestones (held in escrow, released individually on verified proof):\n${milestoneLines}\n\n` +
+    `Payment milestones (released individually from escrow on verified proof):\n${milestoneLines}\n\n` +
+    (project.fundingMode === 'full_upfront'
+      ? `Funding terms: FULL UPFRONT — the entire contract value (${bid.price} ${project.currency}) must be held in escrow before any milestone starts.\n`
+      : `Funding terms: STAGED — escrow is funded milestone by milestone. A milestone may only start once its amount is held in escrow (the funder tops up before each next milestone). ` +
+        `The contractor may voluntarily proceed on an unfunded milestone at their own financial risk; doing so does not fund the milestone, release money, or guarantee payment.\n`) +
+    `Total contract value, funded amount, released amount and unfunded amount are tracked separately on the platform.\n\n` +
     `Platform fee applies per milestone release per the current fee schedule.\n` +
     `Generated ${new Date().toISOString()}`;
 

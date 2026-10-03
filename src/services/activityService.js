@@ -1,4 +1,4 @@
-const { Project, Bid, LandListing, Escrow, Dispute } = require('../models');
+const { Project, Bid, LandListing, Escrow, Dispute, MilestoneRiskAcknowledgement } = require('../models');
 
 /**
  * A user's own activity feed, derived entirely from ground truth — no
@@ -19,11 +19,17 @@ async function getRecentActivity(userId, { limit = 50 } = {}) {
   ]);
   const ownedProjectIds = ownedProjects.map((p) => p._id);
 
-  const [fundEscrows, myDisputes] = await Promise.all([
+  const [fundEscrows, myDisputes, riskAcks] = await Promise.all([
     Escrow.find({ type: 'fund', projectId: { $in: ownedProjectIds }, status: 'completed' })
       .select('_id projectId netAmount currency createdAt')
       .lean(),
     Dispute.find({ raisedBy: userId }).select('_id projectId reason createdAt').populate('projectId', 'title').lean(),
+    // "Proceed Without Full Escrow" audit records — shown to the contractor
+    // who chose it and to the funder whose project it is on.
+    MilestoneRiskAcknowledgement.find({ $or: [{ contractorId: userId }, { projectId: { $in: ownedProjectIds } }] })
+      .select('_id projectId milestoneName milestoneAmount unfundedAmount currency acknowledgedAt')
+      .populate('projectId', 'title')
+      .lean(),
   ]);
 
   const events = [];
@@ -86,6 +92,20 @@ async function getRecentActivity(userId, { limit = 50 } = {}) {
       createdAt: d.createdAt,
       projectTitle,
       reason: d.reason,
+    });
+  }
+
+  for (const r of riskAcks) {
+    const projectTitle = r.projectId && typeof r.projectId === 'object' ? r.projectId.title : undefined;
+    const projectId = r.projectId && typeof r.projectId === 'object' ? r.projectId._id : r.projectId;
+    events.push({
+      type: 'milestone_proceed_at_risk',
+      path: projectId ? `/funder/tender/${projectId}/bids` : undefined,
+      createdAt: r.acknowledgedAt,
+      projectTitle,
+      milestoneName: r.milestoneName,
+      amount: r.unfundedAmount,
+      currency: r.currency,
     });
   }
 

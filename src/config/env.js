@@ -131,4 +131,13 @@ module.exports = {
     advisorEmail: (process.env.AI_ADVISOR_EMAIL || 'advisor@system.mboatrust.local').trim().toLowerCase(),
     advisorName: process.env.AI_ADVISOR_NAME || 'Mboa Trust Advisor',
   },
+
+  // Optional upgrade over the free Nominatim geocoding this app already uses
+  // (see services/geocodingService.js) — when set, forward geocoding
+  // (address → coordinates) tries Google first for better accuracy on named
+  // places, falling back to Nominatim automatically on any failure or when
+  // this is blank. Never required: the feature works with zero setup today.
+  googleMaps: {
+    apiKey: process.env.GOOGLE_MAPS_API_KEY || '',
+  },
 };

@@ -35,6 +35,7 @@ router.use('/dev', require('./devRoutes'));
 router.use('/team-members', require('./teamMemberRoutes'));
 router.use('/project-templates', require('./projectTemplateRoutes'));
 router.use('/verifier-profiles', require('./verifierProfileRoutes'));
+router.use('/verifier-invitations', require('./verifierInvitationRoutes'));
 router.use('/supplier-profiles', require('./supplierProfileRoutes'));
 router.use('/inventory-items', require('./inventoryItemRoutes'));
 router.use('/material-orders', require('./materialOrderRoutes'));
@@ -49,6 +50,7 @@ router.use('/admin/admins', require('./adminAccountRoutes'));
 router.use('/system-events', require('./systemEventRoutes'));
 router.use('/activity', require('./activityRoutes'));
 router.use('/support-tickets', require('./supportTicketRoutes'));
+router.use('/dashboard', require('./dashboardRoutes'));
 router.use('/help-articles', require('./helpArticleRoutes'));
 
 module.exports = router;

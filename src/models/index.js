@@ -1,3 +1,8 @@
+// Must run before any model below is compiled — Mongoose only applies a
+// global plugin to schemas compiled after it's registered. Emits live
+// `dashboard:changed` socket events on writes (see services/dashboardEvents.js).
+require('../services/dashboardEvents').registerPlugin();
+
 module.exports = {
   User: require('./User'),
   Project: require('./Project'),
@@ -39,4 +44,6 @@ module.exports = {
   SmtpSettings: require('./SmtpSettings'),
   SupportTicket: require('./SupportTicket'),
   HelpArticle: require('./HelpArticle'),
+  MilestoneRiskAcknowledgement: require('./MilestoneRiskAcknowledgement'),
+  VerifierInvitation: require('./VerifierInvitation'),
 };

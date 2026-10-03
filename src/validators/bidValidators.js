@@ -11,6 +11,12 @@ const milestoneProposal = z.object({
   amount: z.number().min(0),
 });
 
+// How escrow gets funded under a set of terms: 'staged' (default — milestone by
+// milestone, only funded milestones can start) or 'full_upfront' (the whole
+// contract value must be in escrow before any milestone starts). Negotiated
+// per round; the accepted round's value becomes Project.fundingMode.
+const fundingMode = z.enum(['staged', 'full_upfront']);
+
 const createBid = z.object({
   projectId: objectId,
   price: z.number().min(0),
@@ -20,6 +26,7 @@ const createBid = z.object({
   // Optional — an empty/omitted schedule means "a lump-sum price, no
   // per-milestone breakdown proposed yet", today's original behavior.
   milestones: z.array(milestoneProposal).optional().default([]),
+  fundingMode: fundingMode.optional().default('staged'),
 });
 
 const updateBidStatus = z.object({
@@ -34,6 +41,8 @@ const counterBid = z.object({
   timelineDays: z.number().int().min(1),
   milestones: z.array(milestoneProposal).optional().default([]),
   message: z.string().optional().default(''),
+  // Omitted = keep whatever the current terms already say.
+  fundingMode: fundingMode.optional(),
 });
 
 module.exports = { createBid, updateBidStatus, counterBid, milestoneProposal };

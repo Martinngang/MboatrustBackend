@@ -1,5 +1,5 @@
 const { z } = require('zod');
-const { geoPoint } = require('./common');
+const { geoPoint, locationDetailsExtras } = require('./common');
 
 const createLandListing = z.object({
   title: z.string().optional().default(''),
@@ -11,6 +11,7 @@ const createLandListing = z.object({
   sizeSqm: z.number().positive(),
   price: z.number().min(0),
   location: geoPoint.optional(),
+  ...locationDetailsExtras,
   documents: z
     .array(z.object({ type: z.string().min(1), fileUrl: z.string().url() }))
     .optional()

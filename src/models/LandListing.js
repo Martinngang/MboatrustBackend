@@ -1,4 +1,5 @@
 const { Schema, model } = require('mongoose');
+const { LocationDetailsSchema } = require('./Project');
 
 const LandDocumentSchema = new Schema(
   {
@@ -32,6 +33,7 @@ const LandListingSchema = new Schema(
       lat: { type: Number, default: null },
       lng: { type: Number, default: null },
     },
+    locationDetails: { type: LocationDetailsSchema, default: () => ({}) },
     documents: { type: [LandDocumentSchema], default: [] },
     verificationStatus: {
       type: String,
