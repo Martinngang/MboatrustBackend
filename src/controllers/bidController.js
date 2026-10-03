@@ -249,9 +249,17 @@ const updateStatus = catchAsync(async (req, res) => {
     });
     project.status = 'in_progress';
     await project.save();
+    const losingBids = await Bid.find({ projectId: bid.projectId, _id: { $ne: bid._id }, status: 'submitted' }).select('_id contractorId');
     await Bid.updateMany(
-      { projectId: bid.projectId, _id: { $ne: bid._id }, status: 'submitted' },
+      { _id: { $in: losingBids.map((b) => b._id) } },
       { status: 'rejected' }
+    );
+    // Same notification the tender-cancel path sends — an auto-rejected
+    // bidder shouldn't have to discover it by opening My Bids.
+    await Promise.all(
+      losingBids.map((b) =>
+        notificationService.notify(b.contractorId, 'bid_status_changed', { bidId: b._id, projectId: bid.projectId, status: 'rejected' })
+      )
     );
   }
 
