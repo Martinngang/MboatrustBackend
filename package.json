@@ -33,7 +33,8 @@
     "charge:subscription-renewals": "node src/scripts/chargeSubscriptionRenewals.js",
     "verify:full-backend": "node src/scripts/verifyFullBackend.js",
     "verify:staged-funding": "node src/scripts/verifyStagedFunding.js",
-    "verify:verifier-invitation": "node src/scripts/verifyVerifierInvitationAndLocationAudit.js"
+    "verify:verifier-invitation": "node src/scripts/verifyVerifierInvitationAndLocationAudit.js",
+    "verify:supplier-requirement": "node src/scripts/verifySupplierRequirement.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

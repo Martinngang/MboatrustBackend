@@ -31,6 +31,7 @@ const TYPE_TO_CATEGORY = {
   verification_assigned: 'milestones',
   location_verified: 'milestones',
   verifier_invitation_accepted: 'milestones',
+  supplier_selected_for_project: 'milestones',
   video_verification_requested: 'milestones',
   video_verification_scheduled: 'milestones',
   new_message: 'messages',

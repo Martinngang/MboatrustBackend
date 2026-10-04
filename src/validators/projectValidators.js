@@ -35,6 +35,10 @@ const createProject = z.object({
   // the file itself (if yes) is a follow-up multipart call to
   // POST /projects/:id/plan-document, since this endpoint is plain JSON.
   hasExistingPlan: z.boolean().optional().default(false),
+  // Supplier requirement chosen at posting time. have_supplier needs a real
+  // supplier id; need_supplier / none never carry one.
+  supplierRequirement: z.enum(['none', 'have_supplier', 'need_supplier']).optional().default('none'),
+  preferredSupplierId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid id').nullable().optional(),
   // Materials-managed-by is deliberately NOT set here — a project always
   // starts 'contractor'-managed (the Project schema default) and only ever
   // becomes supplier-managed via POST /projects/:id/assign-supplier, once
@@ -65,7 +69,10 @@ const updateProject = z.object({
 // status, not just while still 'draft'/'open' like the generic update.
 // `supplierId: null` unassigns, reverting to 'contractor'-managed.
 const assignSupplier = z.object({
-  supplierId: z.string().nullable(),
+  supplierId: z.string().nullable().optional(),
+  // With no supplierId: 'need_supplier' marks the tender as still needing
+  // one sourced, 'none' (default) clears the requirement entirely.
+  supplierRequirement: z.enum(['none', 'need_supplier']).optional(),
 });
 
 const fundProject = z.object({

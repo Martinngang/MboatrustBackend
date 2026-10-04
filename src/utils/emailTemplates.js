@@ -218,6 +218,13 @@ const CONTENT = {
     ctaLabel: 'View project',
     ctaUrl: webUrl('/projects'),
   }),
+  supplier_selected_for_project: (p) => ({
+    subject: 'A funder selected you as the supplier for a project',
+    heading: 'You were selected as a supplier',
+    body: `A funder chose you as the materials supplier for${p?.projectTitle ? ` "${p.projectTitle}"` : ' a project'}. You'll receive material orders from the contractor as milestones begin.`,
+    ctaLabel: 'Open your supplier dashboard',
+    ctaUrl: webUrl('/supplier/dashboard'),
+  }),
   verifier_invitation_accepted: (p) => ({
     subject: 'Your invited verifier accepted',
     heading: 'Verifier invitation accepted',

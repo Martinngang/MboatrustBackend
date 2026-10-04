@@ -20,6 +20,43 @@ const { getRecommendedVerifiers } = require('../services/verifierMatchingService
 const { getFundingState, assertMilestoneWorkable, quoteFunding, handleFundCompleted, findAcceptedContractorId, EPS } = require('../services/milestoneFundingService');
 const { releaseIfFunded, finalizeReleases } = require('../services/milestoneReleaseService');
 
+/** Public supplier summary for projects that have one selected — only the
+ * business-facing fields a contractor needs to see ("who's supplying
+ * materials"), never the supplier's owner/contact details. Added alongside
+ * `preferredSupplierId` (which stays a plain id for existing consumers)
+ * rather than populating it in place. */
+async function withSupplierSummary(docs) {
+  const list = Array.isArray(docs) ? docs : [docs];
+  const ids = [...new Set(list.map((p) => p.preferredSupplierId).filter(Boolean).map(String))];
+  const suppliers = ids.length ? await SupplierProfile.find({ _id: { $in: ids } }).select('businessName region').lean() : [];
+  const byId = new Map(suppliers.map((s) => [String(s._id), { id: s._id, businessName: s.businessName, region: s.region }]));
+  const out = list.map((p) => {
+    const obj = typeof p.toObject === 'function' ? p.toObject() : p;
+    obj.supplier = p.preferredSupplierId ? byId.get(String(p.preferredSupplierId)) ?? null : null;
+    return obj;
+  });
+  return Array.isArray(docs) ? out : out[0];
+}
+
+/** Validates a funder-selected supplier (must exist and be approved) and
+ * returns the field set to apply — shared by tender creation and the
+ * post-creation assign endpoint so both enforce identical rules. Never
+ * auto-picks a supplier: have_supplier requires an explicit id. */
+async function resolveSupplierChoice({ supplierRequirement, supplierId }) {
+  // An explicit supplierId with no stated requirement keeps the older
+  // assign-supplier contract (a bare supplierId means "use this supplier").
+  const wantsSupplier = supplierRequirement === 'have_supplier' || (!supplierRequirement && Boolean(supplierId));
+  if (wantsSupplier) {
+    if (!supplierId) throw ApiError.badRequest('Select a supplier, or choose "I need a Supplier" instead');
+    const supplier = await SupplierProfile.findById(supplierId).select('_id ownerId applicationStatus');
+    if (!supplier) throw ApiError.notFound('Supplier not found');
+    if (supplier.applicationStatus !== 'approved') throw ApiError.badRequest('This supplier is not approved yet');
+    return { fields: { supplierRequirement: 'have_supplier', materialsManagedBy: 'supplier', preferredSupplierId: supplier._id }, supplier };
+  }
+  const requirement = supplierRequirement === 'need_supplier' ? 'need_supplier' : 'none';
+  return { fields: { supplierRequirement: requirement, materialsManagedBy: 'contractor', preferredSupplierId: null }, supplier: null };
+}
+
 const getAll = catchAsync(async (req, res) => {
   const { page = 1, limit = 20, projectType, status, ownerId, funderId, search } = req.query;
   const filter = {};
@@ -55,7 +92,7 @@ const getAll = catchAsync(async (req, res) => {
       .limit(Number(limit)),
     Project.countDocuments(filter),
   ]);
-  return ok(res, items, { page: Number(page), limit: Number(limit), total });
+  return ok(res, await withSupplierSummary(items), { page: Number(page), limit: Number(limit), total });
 });
 
 const getOne = catchAsync(async (req, res) => {
@@ -67,7 +104,7 @@ const getOne = catchAsync(async (req, res) => {
     // contractor's own — see submitEvidence's TeamMember delegate check.
     .populate('milestones.evidence.submittedBy', 'fullName');
   if (!project) throw ApiError.notFound('Project not found');
-  return ok(res, project);
+  return ok(res, await withSupplierSummary(project));
 });
 
 // Role-based separation: a tender is a Funder posting work for a contractor
@@ -124,14 +161,28 @@ const create = catchAsync(async (req, res) => {
       source: req.body.locationSource || 'manual_pin',
     });
   }
+  // Supplier requirement — nothing is ever auto-assigned: a supplier is only
+  // attached when the funder explicitly chose "I already have a Supplier".
+  const { supplierRequirement: _req, preferredSupplierId: _sid, ...rest } = req.body;
+  const { fields: supplierFields, supplier: chosenSupplier } = await resolveSupplierChoice({
+    supplierRequirement: req.body.supplierRequirement,
+    supplierId: req.body.preferredSupplierId,
+  });
   const project = await Project.create({
-    ...req.body,
+    ...rest,
+    ...supplierFields,
     location,
     locationDetails,
     milestones,
     ownerId: req.user._id,
     status: 'open',
   });
+  if (chosenSupplier) {
+    await notificationService.notify(chosenSupplier.ownerId, 'supplier_selected_for_project', {
+      projectId: project._id,
+      projectTitle: project.title,
+    });
+  }
   await project.populate('ownerId', 'fullName');
   // A new tender has no natural notify() recipient (it's a public posting,
   // not an event aimed at a specific person) — broadcast it the same way
@@ -140,7 +191,7 @@ const create = catchAsync(async (req, res) => {
   if (project.projectType === 'tender') {
     req.app.get('io')?.emit('project:created', { id: project._id, projectType: project.projectType });
   }
-  return created(res, project);
+  return created(res, await withSupplierSummary(project));
 });
 
 /** Safe, real "close" — only permitted while the project has never received
@@ -521,19 +572,20 @@ const assignSupplier = catchAsync(async (req, res) => {
   const isAdmin = req.user.roles?.some((r) => r.roleType === 'admin');
   if (String(project.ownerId) !== String(req.user._id) && !isAdmin) throw ApiError.forbidden();
 
-  const { supplierId } = req.body;
-  if (supplierId) {
-    const supplier = await SupplierProfile.findById(supplierId).select('_id applicationStatus');
-    if (!supplier) throw ApiError.notFound('Supplier not found');
-    if (supplier.applicationStatus !== 'approved') throw ApiError.badRequest('This supplier is not approved yet');
-    project.materialsManagedBy = 'supplier';
-    project.preferredSupplierId = supplierId;
-  } else {
-    project.materialsManagedBy = 'contractor';
-    project.preferredSupplierId = null;
-  }
+  const { supplierId, supplierRequirement } = req.body;
+  const previousSupplierId = project.preferredSupplierId ? String(project.preferredSupplierId) : null;
+  const { fields, supplier } = await resolveSupplierChoice({ supplierRequirement, supplierId });
+  Object.assign(project, fields);
   await project.save();
-  return ok(res, project);
+  // Only tell the supplier when they're newly selected — re-saving the same
+  // choice (or clearing it) shouldn't ping anyone.
+  if (supplier && String(supplier._id) !== previousSupplierId) {
+    await notificationService.notify(supplier.ownerId, 'supplier_selected_for_project', {
+      projectId: project._id,
+      projectTitle: project.title,
+    });
+  }
+  return ok(res, await withSupplierSummary(project));
 });
 
 /** Dedicated endpoint, same reasoning as assignSupplier above — a pin

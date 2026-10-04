@@ -172,6 +172,13 @@ const ProjectSchema = new Schema(
     // every milestone on this project.
     materialsManagedBy: { type: String, enum: ['contractor', 'supplier'], default: 'contractor' },
     preferredSupplierId: { type: Schema.Types.ObjectId, ref: 'SupplierProfile', default: null },
+    // The funder's stated supplier/material-sourcing need, shown publicly on
+    // the tender so contractors know before they bid: 'none' (no supplier
+    // involvement), 'have_supplier' (funder picked one — preferredSupplierId
+    // is set, materialsManagedBy is 'supplier'), or 'need_supplier' (funder
+    // still needs one sourced — nothing is auto-assigned; a supplier is only
+    // ever attached when the funder explicitly selects one).
+    supplierRequirement: { type: String, enum: ['none', 'have_supplier', 'need_supplier'], default: 'none' },
     milestones: { type: [MilestoneSchema], default: [] },
 
     // The funder's yes/no answer at creation time to "do you already have a
