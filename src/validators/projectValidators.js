@@ -39,12 +39,11 @@ const createProject = z.object({
   // supplier id; need_supplier / none never carry one.
   supplierRequirement: z.enum(['none', 'have_supplier', 'need_supplier']).optional().default('none'),
   preferredSupplierId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid id').nullable().optional(),
-  // Materials-managed-by is deliberately NOT set here — a project always
-  // starts 'contractor'-managed (the Project schema default) and only ever
-  // becomes supplier-managed via POST /projects/:id/assign-supplier, once
-  // the funder has actually browsed/compared real stores. Forcing a store
-  // pick into the creation form (an earlier version of this) skipped that
-  // comparison step entirely.
+  // Materials-managed-by is never set directly: it's derived from
+  // supplierRequirement above (have_supplier -> 'supplier', otherwise
+  // 'contractor'), and a supplier is only ever attached when the funder
+  // explicitly picks one — never auto-assigned. A funder can also pick or
+  // change one later via POST /projects/:id/assign-supplier.
 });
 
 const updateProject = z.object({
